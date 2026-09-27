@@ -778,6 +778,10 @@ async function render(task) {
   $("#code-feedback").disabled = !canGiveFeedback;
   $("#continue-development-button").disabled = !canGiveFeedback;
   const feedbackRounds = task.metadata.user_feedback_rounds || [];
+  const canRollbackFeedback = canGiveFeedback && task.status !== "merged" && feedbackRounds.some((item) =>
+    (item.snapshot_id || item.diff) && item.operation !== "rollback" && !item.rolled_back_at
+  );
+  $("#rollback-feedback-button").disabled = !canRollbackFeedback;
   const inheritedConversation = task.metadata.inherited_conversation || [];
   const followupContext = task.metadata.followup_of
     ? '<div class="chat-message agent"><b>Agent · 后续任务</b><p>此任务从已合入任务 ' + escapeHtml(task.metadata.followup_of) + ' 派生，并已基于默认分支最新代码重新建立工作区。</p></div>' +
@@ -1118,6 +1122,21 @@ $("#continue-development-button").addEventListener("click", async () => {
     await watchJob(job);
   } catch (error) { notify(error.message); }
   finally { button.disabled = false; button.innerHTML = "发送并继续开发 <b>→</b>"; }
+});
+$("#rollback-feedback-button").addEventListener("click", async () => {
+  if (!currentTask) return;
+  const button = $("#rollback-feedback-button");
+  button.disabled = true; button.textContent = "正在撤销…";
+  try {
+    const job = await api(`/api/tasks/${currentTask.id}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({actor: "demo-user", feedback: "撤销上一轮修改"}),
+    });
+    renderJob(job);
+    notify("撤销请求已提交，将恢复上一轮开始前的代码");
+    await watchJob(job);
+  } catch (error) { notify(error.message); }
+  finally { button.textContent = "撤销上一轮"; }
 });
 $("#current-diff-button").addEventListener("click", () => {
   if (!currentTask?.result) return;

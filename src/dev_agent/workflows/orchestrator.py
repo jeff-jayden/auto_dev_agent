@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import difflib
+import json
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -843,18 +844,27 @@ class TaskOrchestrator:
         repository = self.store.get_repository(task.repository_id or "demo")
         if repository is None:
             raise ValueError("Repository not found")
-        if repository.execution_mode != "plan_only" or not self.generic_developer.model_gateway.enabled:
-            raise ValueError("User feedback repair requires a configured Developer Agent")
         normalized_feedback = feedback.strip()
         if not normalized_feedback:
             raise ValueError("Feedback cannot be empty")
+        rollback_requested = self._is_feedback_rollback(normalized_feedback)
+        if (
+            not rollback_requested
+            and (
+                repository.execution_mode != "plan_only"
+                or not self.generic_developer.model_gateway.enabled
+            )
+        ):
+            raise ValueError("User feedback repair requires a configured Developer Agent")
 
         before_snapshot = self._workspace_snapshot(task)
+        snapshot_id = self._save_feedback_snapshot(task, before_snapshot)
         feedback_round = {
             "actor": actor,
             "feedback": normalized_feedback,
             "submitted_at": datetime.now(UTC).isoformat(),
             "status": "running",
+            "snapshot_id": snapshot_id,
             "agent_message": "Agent 正在根据这条意见修改代码。",
             "changed_files": [],
             "diff": "",
@@ -873,6 +883,11 @@ class TaskOrchestrator:
             f"{actor} 查看 Diff 后要求继续修改",
             {"feedback": normalized_feedback, "job_id": job_id},
         )
+
+        if rollback_requested:
+            return self._rollback_previous_feedback(
+                task, feedback_round, before_snapshot, actor
+            )
         self._transition(task, TaskStatus.REVIEW_REPAIRING)
         repair_feedback = (
             "用户在发布 PR 前验收代码后提出以下修改意见。必须基于当前工作区继续修改，"
@@ -1367,16 +1382,168 @@ class TaskOrchestrator:
             )
 
     @staticmethod
-    def _workspace_snapshot(task: Task) -> dict[str, str]:
+    def _workspace_snapshot(task: Task) -> dict[str, str | None]:
         if not task.workspace or not task.technical_plan:
             return {}
         workspace = Path(task.workspace).resolve()
-        snapshot: dict[str, str] = {}
+        snapshot: dict[str, str | None] = {}
         for relative in task.technical_plan.affected_files[:40]:
             target = (workspace / relative).resolve()
-            if workspace in target.parents and target.is_file():
-                snapshot[relative] = target.read_text(encoding="utf-8", errors="replace")
+            if workspace not in target.parents:
+                continue
+            snapshot[relative] = (
+                target.read_text(encoding="utf-8", errors="replace")
+                if target.is_file() else None
+            )
         return snapshot
+
+    @staticmethod
+    def _is_feedback_rollback(feedback: str) -> bool:
+        compact = "".join(feedback.lower().split()).strip("。！!，,")
+        actions = ("取消", "撤销", "回退", "还原", "恢复")
+        targets = (
+            "上一次修改", "上一轮修改", "刚刚的修改", "刚才的修改",
+            "本轮修改", "这次修改", "之前的修改",
+        )
+        return any(action in compact for action in actions) and any(
+            target in compact for target in targets
+        )
+
+    def _feedback_snapshot_dir(self, task: Task) -> Path:
+        if not task.workspace:
+            raise ValueError("Task workspace is not available")
+        return Path(task.workspace).resolve().parent / "feedback_snapshots"
+
+    def _save_feedback_snapshot(
+        self, task: Task, snapshot: dict[str, str | None]
+    ) -> str:
+        snapshot_id = uuid4().hex[:16]
+        directory = self._feedback_snapshot_dir(task)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{snapshot_id}.json"
+        target.write_text(
+            json.dumps({"files": snapshot}, ensure_ascii=False), encoding="utf-8"
+        )
+        return snapshot_id
+
+    def _load_feedback_snapshot(
+        self, task: Task, snapshot_id: str
+    ) -> dict[str, str | None]:
+        target = self._feedback_snapshot_dir(task) / f"{snapshot_id}.json"
+        if not target.is_file():
+            raise ValueError("上一轮修改没有可恢复的工作区快照")
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        files = payload.get("files", {})
+        if not isinstance(files, dict):
+            raise ValueError("上一轮修改的工作区快照无效")
+        return {
+            str(path): content if isinstance(content, str) else None
+            for path, content in files.items()
+        }
+
+    def _restore_feedback_snapshot(
+        self, task: Task, snapshot: dict[str, str | None]
+    ) -> None:
+        if not task.workspace:
+            raise ValueError("Task workspace is not available")
+        workspace = Path(task.workspace).resolve()
+        for relative, content in snapshot.items():
+            target = (workspace / relative).resolve()
+            if workspace not in target.parents:
+                raise ValueError(f"Snapshot path is outside task workspace: {relative}")
+            if content is None:
+                if target.is_file():
+                    target.unlink()
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _reverse_legacy_feedback_diff(task: Task, diff: str) -> None:
+        if not task.workspace or not diff.strip():
+            raise ValueError("上一轮修改没有可恢复的工作区快照")
+        command = ["git", "apply", "--reverse", "--whitespace=nowarn", "-"]
+        check = subprocess.run(
+            command[:2] + ["--check"] + command[2:],
+            cwd=task.workspace,
+            input=diff,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if check.returncode != 0:
+            raise ValueError("旧任务的上一轮 Diff 已与当前代码不一致，无法安全撤销")
+        applied = subprocess.run(
+            command,
+            cwd=task.workspace,
+            input=diff,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if applied.returncode != 0:
+            raise ValueError(f"撤销上一轮 Diff 失败：{applied.stderr.strip()}")
+
+    def _rollback_previous_feedback(
+        self,
+        task: Task,
+        feedback_round: dict,
+        before_snapshot: dict[str, str | None],
+        actor: str,
+    ) -> Task:
+        rounds = task.metadata.get("user_feedback_rounds", [])
+        candidates = [
+            item for item in rounds[:-1]
+            if (item.get("snapshot_id") or item.get("diff"))
+            and item.get("operation") != "rollback"
+            and not item.get("rolled_back_at")
+        ]
+        if not candidates:
+            feedback_round.update({
+                "status": "failed",
+                "agent_message": "没有找到可撤销的上一轮修改快照。",
+                "completed_at": datetime.now(UTC).isoformat(),
+                "operation": "rollback",
+            })
+            self.store.save_task(task)
+            raise ValueError("没有找到可撤销的上一轮修改快照")
+
+        target_round = candidates[-1]
+        snapshot_id = target_round.get("snapshot_id")
+        if snapshot_id:
+            snapshot = self._load_feedback_snapshot(task, str(snapshot_id))
+            self._restore_feedback_snapshot(task, snapshot)
+        else:
+            self._reverse_legacy_feedback_diff(task, str(target_round.get("diff", "")))
+        rolled_back_at = datetime.now(UTC).isoformat()
+        target_round["rolled_back_at"] = rolled_back_at
+        target_round["rolled_back_by"] = actor
+        feedback_round["operation"] = "rollback"
+        task.error = None
+        task.pending_proposal = None
+        task.merge_request = None
+        task.metadata.pop("pending_repair_feedback", None)
+        task.metadata.pop("review_repair_pending", None)
+        task.metadata["validation_stale"] = True
+        if task.status in {
+            TaskStatus.WAITING_RELEASE_APPROVAL,
+            TaskStatus.WAITING_MERGE_APPROVAL,
+        }:
+            self._transition(task, TaskStatus.CHANGES_REQUESTED)
+        self._finish_user_feedback_round(
+            task,
+            feedback_round,
+            before_snapshot,
+            TaskStatus.CHANGES_REQUESTED.value,
+            "已恢复到上一轮修改开始前的工作区；未触发模型、测试或旧需求的自动修复，可以继续提出新的修改意见。",
+        )
+        self._event(
+            task,
+            "user_feedback_rolled_back",
+            "已撤销上一轮用户反馈产生的代码修改",
+            {"snapshot_id": snapshot_id, "actor": actor},
+        )
+        return task
 
     def current_workspace_diff(self, task: Task) -> str:
         """Return the cumulative diff that is actually present in the task worktree.
@@ -1400,7 +1567,7 @@ class TaskOrchestrator:
         self,
         task: Task,
         feedback_round: dict,
-        before_snapshot: dict[str, str],
+        before_snapshot: dict[str, str | None],
         status: str,
         message: str,
         review_decision: str | None = None,
@@ -1409,8 +1576,8 @@ class TaskOrchestrator:
         changed_files: list[str] = []
         diff_parts: list[str] = []
         for path in sorted(set(before_snapshot) | set(after_snapshot)):
-            before = before_snapshot.get(path, "")
-            after = after_snapshot.get(path, "")
+            before = before_snapshot.get(path) or ""
+            after = after_snapshot.get(path) or ""
             if before == after:
                 continue
             changed_files.append(path)

@@ -389,3 +389,53 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
         self.assertEqual(updated.reviews[-1].round, 2)
         event_types = [item.event_type for item in orchestrator.store.list_events(task.id)]
         self.assertIn("user_feedback_submitted", event_types)
+
+    def test_rollback_feedback_restores_previous_round_without_running_agent_or_review(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "撤销验收修改", "任务支持 low、medium、high，默认使用 medium，非法值必须拒绝。"
+        )
+        task = orchestrator.approve(task.id, "tester", "同意")
+        repository = orchestrator.store.get_repository("demo")
+        repository.execution_mode = "plan_only"
+        orchestrator.store.save_repository(repository)
+        target = Path(task.workspace) / "task_service.py"
+        original = target.read_text(encoding="utf-8")
+
+        class FeedbackDeveloper:
+            model_gateway = type("Gateway", (), {"enabled": True})()
+
+            def __init__(self):
+                self.calls = 0
+
+            def run(self, current_task, repository_path, **kwargs):
+                self.calls += 1
+                changed = Path(repository_path) / "task_service.py"
+                changed.write_text(
+                    changed.read_text(encoding="utf-8") + "\n# temporary feedback change\n",
+                    encoding="utf-8",
+                )
+                return DeveloperRunOutcome(kind="success", result=current_task.result)
+
+        developer = FeedbackDeveloper()
+        orchestrator.generic_developer = developer
+        changed = orchestrator.apply_user_feedback(
+            task.id, "tester", "补充临时说明。"
+        )
+        self.assertIn("temporary feedback change", target.read_text(encoding="utf-8"))
+
+        rolled_back = orchestrator.apply_user_feedback(
+            changed.id, "tester", "撤销上一轮修改"
+        )
+
+        self.assertEqual(developer.calls, 1)
+        self.assertEqual(target.read_text(encoding="utf-8"), original)
+        self.assertEqual(rolled_back.status, TaskStatus.CHANGES_REQUESTED)
+        self.assertIsNone(rolled_back.merge_request)
+        self.assertTrue(rolled_back.metadata["validation_stale"])
+        rounds = rolled_back.metadata["user_feedback_rounds"]
+        self.assertIn("rolled_back_at", rounds[-2])
+        self.assertEqual(rounds[-1]["operation"], "rollback")
+        self.assertIn("未触发模型", rounds[-1]["agent_message"])
+        event_types = [item.event_type for item in orchestrator.store.list_events(task.id)]
+        self.assertIn("user_feedback_rolled_back", event_types)
