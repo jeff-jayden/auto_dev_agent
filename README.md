@@ -50,12 +50,24 @@
 46. CR 页面展示结构、浏览器和视觉验收证据；浏览器渲染失败会阻塞 PR，像素偏差仅提示
 47. Developer 在生成修改前运行有界的只读工具循环，可自主选择文本/符号/引用搜索、分段读文件和 Git 历史
 48. 上下文探索最多执行 4 步且禁止写文件、运行 Shell 或扩大审批范围；写入、测试与发布仍由确定性流程控制
+49. LangGraph Checkpointer 是任务阶段、恢复位置和待人工动作的执行状态源，`Task.status` 仅作为 API/UI 投影
+50. Developer 的上下文准备、方案应用、测试和失败修复使用条件图编排，测试失败会沿图边进入下一轮
+51. Code Review 的审查、自动修复、MR 重生成和再次审查使用独立子图，保留最多三轮边界
+52. 需求、风险、发布和合入审批使用持久化 interrupt，用户操作通过 resume 恢复；Worker 只按 Graph 检查点恢复任务
 
 对于 React/CRA 项目，分析器会优先选择 `App`、对应测试和样式文件，使用非交互测试参数，并在隔离 Worktree 中复用原仓库已有的 `node_modules`，避免测试进入 watch 模式或因依赖目录未复制而失败。
 
 默认使用确定性的本地规划器，因此没有模型 Key 也能完成仓库分析和内置 Demo。真实仓库开发必须配置 Ollama 或 OpenAI-compatible 模型；没有模型时任务会明确失败，不会伪造代码结果。模型输出如果无效、引用方案外文件或请求未批准命令，也会被执行层拒绝。
 
-Developer 的只读上下文工具循环默认对内置模型网关启用，可通过 `DEVELOPER_CONTEXT_TOOLS_ENABLED=false` 关闭，或使用 `DEVELOPER_CONTEXT_MAX_STEPS=1..8` 调整最大探索步数。工具使用 LangChain `StructuredTool` 与 Pydantic 输入 Schema 统一注册和调用；项目自己的 Orchestrator 继续负责 Git、检查点、ToolPolicy、测试与发布，避免框架接管既有交付边界。
+Developer 的只读上下文工具循环默认对内置模型网关启用，可通过 `DEVELOPER_CONTEXT_TOOLS_ENABLED=false` 关闭，或使用 `DEVELOPER_CONTEXT_MAX_STEPS=1..8` 调整最大探索步数。工具使用 LangChain `StructuredTool` 与 Pydantic 输入 Schema 统一注册和调用；LangGraph 负责编排、状态、检查点和人工中断，项目自己的 ToolPolicy 与服务层继续控制 Git 写入、测试命令和 GitHub 发布边界。
+
+## LangGraph 状态边界
+
+- `WorkflowStateStore`：唯一的工作流执行状态，SQLite Checkpointer 按 `task_id` 持久化阶段、版本、检查点和 interrupt。
+- `Task.status`：为了兼容现有 API 和页面保留的读模型，由 Graph 状态完成后投影，不负责决定下一步。
+- `ExecutionJob`：Worker 的队列、租约、心跳和重试记录，描述“谁在执行”，不描述业务流程走到哪里。
+- `task_checkpoints`：继续为历史列表和 Dry Run 提供只读投影；恢复执行只读取 LangGraph 中的最新检查点。
+- Developer 与 Code Review：分别作为条件子图运行；模型负责提出方案或审查意见，图控制循环、上限和人工 Gate。
 
 ## 启动
 
