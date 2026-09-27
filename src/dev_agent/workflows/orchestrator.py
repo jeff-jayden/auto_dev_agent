@@ -7,7 +7,10 @@ import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 from uuid import uuid4
+
+from langgraph.graph import END, START, StateGraph
 
 from dev_agent.agents import (
     CodeReviewerAgent,
@@ -33,6 +36,12 @@ from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubDeliveryService
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
 from .workflow_graph import WorkflowStateStore
+
+
+class ReviewLoopState(TypedDict, total=False):
+    route: str
+    review: object
+    feedback: str
 
 
 class TaskOrchestrator:
@@ -1299,7 +1308,8 @@ class TaskOrchestrator:
 
     def _review_loop(self, task: Task, repository_config, checkpoint_handler=None) -> Task:
         cycle_start = int(task.metadata.get("review_cycle_start", 0))
-        while len(task.reviews) - cycle_start < 3:
+
+        def review_node(_state: ReviewLoopState) -> dict:
             self._transition(task, TaskStatus.REVIEWING)
             review = self.code_reviewer.review(task, len(task.reviews) + 1)
             task.reviews.append(review)
@@ -1314,28 +1324,35 @@ class TaskOrchestrator:
                 "finish_review" if review.decision == "approved" else "repair_review",
                 {"review": review.model_dump(mode="json")},
             ):
-                return task
+                return {"route": "done", "review": review}
             if review.decision == "approved":
                 task.error = None
                 self._transition(task, TaskStatus.REVIEW_APPROVED)
                 self._event(task, "review_approved", "Code Review 已通过")
                 self._transition(task, TaskStatus.WAITING_RELEASE_APPROVAL)
                 self._event(task, "release_approval_required", "MR 和 Code Review 已就绪，等待发布审批")
-                return task
+                return {"route": "done", "review": review}
 
             self._transition(task, TaskStatus.CHANGES_REQUESTED)
             self._event(task, "review_changes_requested", "Reviewer 提出阻塞问题，准备自动修复")
             if len(task.reviews) - cycle_start >= 3:
                 task.error = "Automatic review repair exhausted after 3 review rounds"
                 self._event(task, "review_repair_exhausted", "已达到三轮 Code Review 上限，等待人工处理")
-                return task
+                return {"route": "done", "review": review}
             if repository_config.execution_mode != "plan_only" or not self.generic_developer.model_gateway.enabled:
                 task.error = "Blocking review findings require a configured Developer Agent"
                 self._event(task, "review_repair_unavailable", "当前执行模式无法自动修复 CR 问题")
-                return task
+                return {"route": "done", "review": review}
 
+            return {
+                "route": "repair",
+                "review": review,
+                "feedback": self._review_feedback(review),
+            }
+
+        def repair_node(state: ReviewLoopState) -> dict:
             self._transition(task, TaskStatus.REVIEW_REPAIRING)
-            feedback = self._review_feedback(review)
+            feedback = state["feedback"]
             outcome = self.generic_developer.run(
                 task,
                 Path(task.workspace),
@@ -1348,7 +1365,7 @@ class TaskOrchestrator:
                 if outcome.result is not None:
                     task.result = outcome.result
                 self.store.save_task(task)
-                return task
+                return {"route": "done"}
             if outcome.kind == "risk_approval":
                 task.pending_proposal = outcome.pending_proposal
                 task.metadata["risk_reasons"] = outcome.risk_reasons
@@ -1356,18 +1373,35 @@ class TaskOrchestrator:
                 task.metadata["pending_repair_feedback"] = feedback
                 self._transition(task, TaskStatus.WAITING_RISK_APPROVAL)
                 self._event(task, "risk_approval_required", "CR 修复涉及高风险文件，等待人工审批")
-                return task
+                return {"route": "done"}
             if outcome.kind != "success":
                 task.error = outcome.error or "Review repair failed"
                 self._transition(task, TaskStatus.CHANGES_REQUESTED)
                 self._event(task, "review_repair_failed", "CR 自动修复失败", {"error": task.error})
-                return task
+                return {"route": "done"}
 
             task.result = outcome.result
             task.error = None
             self._transition(task, TaskStatus.GENERATING_MR)
             task.merge_request = self._write_merge_request(task)
             self._event(task, "merge_request_regenerated", "CR 修复测试通过，已重新生成 MR 草稿")
+            return {"route": "review"}
+
+        graph = StateGraph(ReviewLoopState)
+        graph.add_node("review", review_node)
+        graph.add_node("repair", repair_node)
+        graph.add_edge(START, "review")
+        graph.add_conditional_edges(
+            "review",
+            lambda state: state["route"],
+            {"repair": "repair", "done": END},
+        )
+        graph.add_conditional_edges(
+            "repair",
+            lambda state: state["route"],
+            {"review": "review", "done": END},
+        )
+        graph.compile(name="code-review-repair-loop").invoke({})
         return task
 
     def _append_attempts(self, task: Task, attempts, label: str = "CR 修复尝试") -> None:
