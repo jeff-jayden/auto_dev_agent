@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Dev Agent</title>
+    <link rel="stylesheet" href="/assets/app.css?v=26" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">A</span><div><b>AI Dev Agent</b><small>Development Workspace</small></div></div>
+        <nav class="primary-nav" aria-label="主流程">
+          <p class="nav-label">交付流程</p>
+          <button type="button" class="nav-item active" data-view="requirement"><span>01</span><div><b>需求</b><small>仓库、分析与方案</small></div></button>
+          <button type="button" class="nav-item" data-view="development"><span>02</span><div><b>开发</b><small>对话与代码变更</small></div></button>
+          <button type="button" class="nav-item" data-view="review"><span>03</span><div><b>代码 CR</b><small>验证、MR 与发布</small></div></button>
+          <p class="nav-label nav-label-secondary">更多</p>
+          <button type="button" class="nav-item" data-view="observability"><span>O</span><div><b>Agent 可观测性</b><small>Trace 与检查点</small></div></button>
+          <button type="button" class="nav-item" data-view="attempts"><span>D</span><div><b>开发尝试</b><small>执行与修复日志</small></div></button>
+        </nav>
+        <div class="sidebar-footer"><span class="health-dot"></span><div><b>服务运行中</b><small>DeepSeek Flash</small></div></div>
+      </aside>
+
+      <main class="app-main">
+        <header class="topbar">
+          <div><span class="eyebrow" id="view-eyebrow">REQUIREMENT</span><h1 id="view-title">需求工作台</h1></div>
+          <div class="topbar-actions"><button type="button" class="secondary" id="new-task-button">＋ 新建任务</button></div>
+        </header>
+
+        <div class="workspace">
+          <section id="create-view" class="workspace-view hidden">
+            <div class="create-workspace">
+              <div class="create-intro"><span class="eyebrow">NEW TASK</span><h2>从一个清晰需求开始</h2><p>选择代码仓库并描述预期行为。Agent 会先生成需求分析和技术方案，经过你的批准后才进入开发。</p><button type="button" class="secondary" id="cancel-create-button">← 返回任务列表</button></div>
+              <section id="create-panel" class="panel create-panel">
+                <form id="task-form">
+                  <label>目标仓库<select id="repository" required></select></label>
+                  <label>任务标题<input id="title" value="为任务增加优先级" required /></label>
+                  <label>需求描述<textarea id="requirement" rows="7" required>任务需要支持 low、medium、high 三种优先级。创建任务时可以指定优先级，不传时默认为 medium，非法值需要拒绝。</textarea></label>
+                  <details class="design-inputs">
+                    <summary>关联 Figma 设计稿（可选）</summary>
+                    <label>Figma Frame 链接<input id="figma-url" placeholder="https://www.figma.com/design/...?...&node-id=1-2" /></label>
+                    <label>实现页面预览地址<input id="preview-url" placeholder="http://127.0.0.1:3000/shorts" /></label>
+                    <div class="viewport-inputs"><label>视口宽度<input id="viewport-width" type="number" min="320" max="3840" value="1440" /></label><label>视口高度<input id="viewport-height" type="number" min="320" max="2160" value="900" /></label></div>
+                    <small>填写 Figma 链接后会通过 MCP 固定设计基线；填写预览地址后，开发完成会自动执行浏览器截图验收。</small>
+                  </details>
+                  <button type="submit" id="create-button">生成需求分析与技术方案 <b>→</b></button>
+                </form>
+                <details class="repo-register" open>
+                  <summary>添加 GitHub 仓库</summary>
+                  <div class="repo-register-grid"><label class="repo-url-field">GitHub 仓库地址<input id="repo-url" placeholder="https://github.com/owner/repository.git" /></label><label>显示名称（可选）<input id="repo-name" placeholder="默认使用仓库名称" /></label></div>
+                  <button type="button" id="register-remote-button">连接并添加仓库</button>
+                  <details class="local-repo-register"><summary>高级：使用本地仓库文件夹</summary><label>本地文件夹<div class="folder-input"><input id="repo-path" readonly placeholder="请选择 Git 仓库文件夹" /><button type="button" class="secondary" id="open-folder-picker-button">选择文件夹</button></div></label><button type="button" class="secondary" id="register-local-button">添加本地仓库</button></details>
+                </details>
+              </section>
+            </div>
+          </section>
+
+          <section id="empty-state" class="workspace-view requirement-layout">
+            <aside class="task-rail panel"><div class="rail-heading"><div><span class="eyebrow">HISTORY</span><h2>历史任务</h2></div><button type="button" class="icon-button" id="empty-new-task-button" aria-label="新建任务">＋</button></div><div id="task-list" class="task-list"></div></aside>
+            <div class="empty-state panel"><div class="radar"></div><h2>选择历史任务或新建任务</h2><p>需求阶段会展示仓库事实、需求分析和技术方案。</p></div>
+          </section>
+
+          <section id="task-view" class="task-workspace hidden">
+            <div class="task-heading">
+              <div class="task-heading-copy"><span class="eyebrow" id="task-id"></span><h2 id="task-title"></h2><p id="task-requirement"></p></div>
+              <div class="task-heading-actions"><span id="status-badge" class="status"></span><button type="button" class="hidden" id="retry-task-button">分析失败并继续 <b>→</b></button><button type="button" class="secondary hidden" id="rerun-task-button">重新执行为新任务</button></div>
+            </div>
+
+            <section id="recovery-panel" class="recovery-panel hidden">
+              <div class="recovery-panel-icon">!</div>
+              <div class="recovery-panel-copy"><span class="eyebrow">INTERRUPTED EXECUTION</span><h3>检测到任务执行中断</h3><p id="recovery-summary"></p><small id="recovery-checkpoint-summary"></small></div>
+              <div class="recovery-actions"><button type="button" class="secondary" id="recovery-details-button">查看诊断详情</button><button type="button" id="recover-task-button">从检查点继续 <b>→</b></button></div>
+            </section>
+
+            <section id="job-panel" class="job-panel hidden">
+              <div><span class="eyebrow">BACKGROUND EXECUTION</span><p id="job-summary"></p></div>
+              <div class="job-actions"><span id="job-status" class="status"></span><button type="button" class="secondary" id="cancel-job-button">取消执行</button><button type="button" id="resume-job-button" class="hidden">继续执行 <b>→</b></button></div>
+            </section>
+
+            <section id="requirement-view" class="workspace-view requirement-layout">
+              <aside class="task-rail panel"><div class="rail-heading"><div><span class="eyebrow">HISTORY</span><h2>历史任务</h2></div><button type="button" class="icon-button rail-new-task" aria-label="新建任务">＋</button></div><div id="task-list-active" class="task-list"></div></aside>
+              <div class="view-scroll requirement-content">
+                <section class="panel repo-analysis"><div class="section-title"><span>R</span><div><h2>仓库事实</h2><p>由只读工具收集</p></div></div><div id="repo-facts" class="fact-grid"></div><div id="code-context" class="code-context"></div><details><summary>查看代码证据与工具审计</summary><div id="evidence" class="evidence-list"></div><div id="tool-calls" class="tool-list"></div></details></section>
+                <div class="grid"><article class="panel"><div class="section-title"><span>01</span><div><h2>需求分析</h2><p>结构化验收标准</p></div></div><p id="summary"></p><h3>验收标准</h3><ul id="criteria"></ul><h3>假设</h3><ul id="assumptions"></ul></article><article class="panel"><div class="section-title"><span>02</span><div><h2>技术方案</h2><p>改动范围与验证计划</p></div></div><p id="approach"></p><h3>影响文件</h3><div id="files" class="chips"></div><h3>实施步骤</h3><ol id="steps"></ol><h3>风险</h3><ul id="risks"></ul></article></div>
+                <section id="approval-panel" class="panel approval-panel"><div><span class="eyebrow">HUMAN GATE</span><h2>是否批准这份方案？</h2><p>批准后才会进入隔离工作区开发。</p></div><div class="approval-actions"><textarea id="revision-feedback" rows="2" placeholder="如需修改方案，请填写意见"></textarea><div class="actions"><button class="secondary" id="reject-button">拒绝</button><button class="secondary" id="revise-button">要求修改</button><button id="approve-button">批准方案 <b>→</b></button></div></div></section>
+              </div>
+            </section>
+
+            <section id="development-view" class="workspace-view split-workspace hidden">
+              <div class="workspace-column chat-column">
+                <section id="risk-panel" class="panel approval-panel risk-panel hidden"><div><span class="eyebrow">HIGH RISK</span><h2>检测到高风险修改</h2><div id="risk-reasons"></div></div><div class="actions"><button class="secondary" id="risk-reject-button">拒绝</button><button id="risk-approve-button">批准并继续</button></div></section>
+                <section id="development-steps-panel" class="panel development-steps-panel"><div class="section-title"><span>↳</span><div><h2>开发步骤</h2><p id="development-step-summary">按批准方案串行执行</p></div></div><div id="development-steps" class="development-steps"></div></section>
+                <section id="feedback-panel" class="panel feedback-panel hidden"><div class="section-title"><span>AI</span><div><h2>与 Agent 持续对话</h2><p>在当前工作区继续调整代码</p></div></div><div id="chat-messages" class="chat-messages"></div><div class="chat-composer"><textarea id="code-feedback" rows="3" placeholder="描述哪里不符合要求…"></textarea><button id="continue-development-button">发送 <b>→</b></button></div></section>
+                <div id="development-placeholder" class="panel empty-state"><div class="radar"></div><h2>等待开发开始</h2><p>批准技术方案后，这里将出现 Agent 对话。</p></div>
+              </div>
+              <article class="panel diff-panel"><div class="diff-heading"><div class="section-title"><span>Δ</span><div><h2>Git Diff</h2><p id="diff-scope-label">当前任务累计修改</p></div></div><button type="button" class="secondary hidden" id="current-diff-button">返回累计 Diff</button></div><div id="diff" class="diff-view"></div></article>
+            </section>
+
+            <section id="review-view" class="workspace-view review-workspace hidden">
+              <article class="panel diff-panel review-diff-panel"><div class="section-title"><span>Δ</span><div><h2>累计 Git Diff</h2><p>相对于任务基线的当前净修改</p></div></div><div id="review-diff" class="diff-view"></div></article>
+              <div class="view-scroll review-evidence">
+                <section id="result-panel" class="hidden"><article class="panel"><div class="section-title"><span>T</span><div><h2>测试证据</h2><p>测试与构建输出</p></div></div><pre id="test-output"></pre></article><article class="panel"><div class="section-title"><span>MR</span><div><h2>MR 描述</h2><p id="mr-title"></p></div></div><pre id="mr-description"></pre></article></section>
+                <section id="ui-acceptance-panel" class="panel ui-acceptance-panel hidden"><div class="ui-acceptance-heading"><div class="section-title"><span>UI</span><div><h2>UI 验收</h2><p id="ui-acceptance-summary">Figma 设计与浏览器实现证据</p></div></div><button type="button" class="secondary" id="rerun-ui-acceptance-button">重新验收</button></div><div id="ui-acceptance-metrics" class="ui-acceptance-metrics"></div><div id="ui-acceptance-checks" class="ui-acceptance-checks"></div><div id="ui-acceptance-images" class="ui-acceptance-images"></div></section>
+                <section id="review-panel" class="panel hidden"><div class="section-title"><span>CR</span><div><h2>Code Review</h2><p>规则与 Reviewer 审查记录</p></div></div><div id="review-rounds"></div></section>
+                <section id="review-gate" class="panel approval-panel hidden"><div><span class="eyebrow">REVIEW OVERRIDE</span><h2>审查仍有阻塞问题</h2><p id="review-gate-message">建议先处理 findings，必要时可人工批准。</p></div><div class="actions"><button class="secondary" id="rerun-review-button">重新审查</button><button id="approve-review-button">人工批准 CR</button></div></section>
+                <section id="release-gate" class="panel approval-panel hidden"><div><span class="eyebrow">GITHUB GATE</span><h2>MR 与 CR 已就绪</h2><p>点击发布后直接创建 GitHub Draft Pull Request。</p></div><div class="actions"><button class="secondary" id="reject-release-button">拒绝发布</button><button id="publish-pr-button">发布 GitHub PR <b>→</b></button></div></section>
+                <section id="pull-request-panel" class="panel approval-panel hidden"><div><span class="eyebrow">GITHUB PR</span><h2 id="pull-request-title"></h2><p id="pull-request-meta"></p><a id="pull-request-link" target="_blank" rel="noopener noreferrer">在 GitHub 打开</a></div><div class="actions"><button class="secondary" id="refresh-pr-button">同步状态</button><button id="merge-pr-button">确认合入</button></div></section>
+                <section id="github-comments-panel" class="panel hidden"><div class="github-comments-heading"><div class="section-title"><span>GH</span><div><h2>PR Review 意见</h2><p>手动选择评论，或使用 /agent fix 自动触发</p></div></div><button type="button" class="secondary" id="sync-github-comments-button">同步评论</button></div><div id="github-comments-list" class="github-comments-list"></div><div class="actions github-comments-actions"><button type="button" id="process-github-comments-button">交给 Agent 处理 <b>→</b></button></div></section>
+              </div>
+            </section>
+
+            <section id="observability-view" class="workspace-view view-scroll hidden">
+              <section id="observability-panel" class="panel observability-panel"><div class="observability-heading"><div class="section-title"><span>O</span><div><h2>Agent 可观测性</h2><p>Trace、Span、模型与工具调用证据</p></div></div><div class="actions"><button type="button" class="secondary" id="replay-button">Dry Run 最近检查点</button><button type="button" id="evaluation-button">运行 Golden Cases</button></div></div><div id="metric-cards" class="metric-grid"></div><div class="trace-layout"><div><h3>执行记录</h3><div id="trace-list" class="trace-list"></div></div><div><div class="call-chain-heading"><h3>调用链</h3><span>执行顺序：从上到下</span></div><div id="span-list" class="span-list"></div></div></div><div id="replay-result" class="replay-result hidden"></div></section>
+              <section class="panel"><div class="section-title"><span>↗</span><div><h2>任务时间线</h2><p>状态变化与人工决策</p></div></div><div class="timeline" id="timeline"></div></section>
+            </section>
+
+            <section id="attempts-view" class="workspace-view view-scroll hidden"><section id="development-panel" class="panel hidden"><div class="section-title"><span>D</span><div><h2>开发尝试</h2><p>Patch、测试和自动修复的完整证据</p></div></div><div id="development-attempts" class="development-attempts"></div></section><div id="attempts-empty" class="panel empty-state"><h2>暂无开发尝试</h2><p>任务开始执行后，这里会记录每次修改与验证结果。</p></div></section>
+          </section>
+        </div>
+      </main>
+    </div>
+    <div id="folder-picker" class="folder-picker-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="folder-picker-title">
+      <section class="folder-picker-dialog">
+        <header><div><span class="eyebrow">LOCAL REPOSITORY</span><h2 id="folder-picker-title">选择 Git 仓库文件夹</h2></div><button type="button" class="secondary folder-picker-close" aria-label="关闭">×</button></header>
+        <div class="folder-picker-location"><button type="button" class="secondary" id="folder-picker-parent">← 上一级</button><code id="folder-picker-path">允许访问的位置</code></div>
+        <div id="folder-picker-list" class="folder-picker-list"></div>
+        <footer><p id="folder-picker-hint">请选择一个包含 .git 的文件夹</p><div><button type="button" class="secondary folder-picker-cancel">取消</button><button type="button" id="folder-picker-select" disabled>选择当前文件夹</button></div></footer>
+      </section>
+    </div>
+    <div id="recovery-drawer" class="recovery-drawer-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="recovery-drawer-title">
+      <aside class="recovery-drawer">
+        <header><div><span class="eyebrow">RECOVERY DIAGNOSIS</span><h2 id="recovery-drawer-title">任务恢复诊断</h2></div><button type="button" class="secondary" id="recovery-drawer-close" aria-label="关闭">×</button></header>
+        <div class="recovery-drawer-summary"><span id="recovery-detail-status" class="status"></span><h3 id="recovery-detail-reason"></h3><p id="recovery-detail-next"></p></div>
+        <div id="recovery-check-list" class="recovery-check-list"></div>
+        <footer><button type="button" class="secondary" id="recovery-drawer-cancel">关闭</button><button type="button" id="recovery-drawer-resume">从检查点继续 <b>→</b></button></footer>
+      </aside>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="/assets/app.js?v=42"></script>
+  </body>
+</html>
