@@ -39,7 +39,9 @@ class TaskExecutionWorker:
                 return
             self._stop.clear()
             orchestrator = self._orchestrator_provider()
-            orchestrator.store.recover_incomplete_jobs()
+            orchestrator.store.recover_incomplete_jobs(
+                lambda task_id: orchestrator.latest_workflow_checkpoint(task_id) is not None
+            )
             self._thread = Thread(target=self._run, name="task-execution-worker", daemon=True)
             self._thread.start()
 

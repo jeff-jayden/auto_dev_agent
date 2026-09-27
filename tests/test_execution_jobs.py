@@ -85,6 +85,24 @@ class ExecutionJobStoreTests(unittest.TestCase):
         self.assertEqual(recovered.status, "cancelled")
         self.assertIsNotNone(recovered.finished_at)
 
+    def test_recovery_uses_injected_graph_checkpoint_lookup(self):
+        job = ExecutionJob(
+            id="job-graph-checkpoint",
+            task_id="task-graph-checkpoint",
+            action="approve",
+            status="pause_requested",
+            attempts=1,
+        )
+        self.store.enqueue_job(job)
+
+        self.store.recover_incomplete_jobs(
+            lambda task_id: task_id == "task-graph-checkpoint"
+        )
+        recovered = self.store.get_job(job.id)
+
+        self.assertEqual(recovered.status, "paused")
+        self.assertIsNotNone(recovered.finished_at)
+
     def test_valid_worker_lease_is_not_recovered_on_startup(self):
         self.store.enqueue_job(ExecutionJob(id="job-1", task_id="task-1", action="approve"))
         running = self.store.claim_next_job("worker-a", lease_seconds=90)

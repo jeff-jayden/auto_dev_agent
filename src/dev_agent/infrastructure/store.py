@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from dev_agent.domain.models import (
     AgentTrace,
@@ -407,7 +407,13 @@ class SQLiteTaskStore:
             )
         return recovery_job
 
-    def recover_incomplete_jobs(self) -> int:
+    def recover_incomplete_jobs(
+        self,
+        has_checkpoint: Callable[[str], bool] | None = None,
+    ) -> int:
+        checkpoint_exists = has_checkpoint or (
+            lambda task_id: self.latest_checkpoint(task_id) is not None
+        )
         recovered = 0
         with self._connect() as connection:
             rows = connection.execute(
@@ -418,7 +424,7 @@ class SQLiteTaskStore:
                 if not self.job_lease_expired(job):
                     continue
                 if job.status in {"pause_requested", "cancel_requested"}:
-                    job.status = "paused" if self.latest_checkpoint(job.task_id) else "cancelled"
+                    job.status = "paused" if checkpoint_exists(job.task_id) else "cancelled"
                     job.error = "Pause completed during worker restart"
                     job.finished_at = datetime.now(UTC)
                 elif job.attempts >= job.max_attempts:
