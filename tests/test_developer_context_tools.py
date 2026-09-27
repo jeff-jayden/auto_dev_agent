@@ -116,6 +116,68 @@ class DeveloperContextToolTests(unittest.TestCase):
         self.assertIn("read_file", tool_names)
         self.assertIn("agent.context_complete", tool_names)
 
+    def test_langgraph_developer_loop_routes_failed_test_to_next_attempt(self):
+        class RepairGateway:
+            enabled = True
+            supports_context_tool_loop = False
+
+            def __init__(self):
+                self.proposals = 0
+
+            def generate_structured(self, _system_prompt, _user_prompt, output_model):
+                if output_model is not ReplacementDevelopmentProposal:
+                    return None
+                self.proposals += 1
+                if self.proposals == 1:
+                    return ReplacementDevelopmentProposal(
+                        summary="先产生一个可诊断的语法错误",
+                        replacements=[TextReplacement(
+                            path="main.py", search='VALUE = "old"', replace="VALUE =",
+                        )],
+                        preserved_behaviors=["保留 VALUE 常量"],
+                        test_command="python -m py_compile main.py",
+                    )
+                return ReplacementDevelopmentProposal(
+                    summary="根据测试结果修复语法错误",
+                    replacements=[TextReplacement(
+                        path="main.py", search="VALUE =", replace='VALUE = "new"',
+                    )],
+                    preserved_behaviors=["保留 VALUE 常量"],
+                    test_command="python -m py_compile main.py",
+                )
+
+        task = Task(
+            id="langgraph-repair-loop",
+            title="修复主模块",
+            requirement="更新 VALUE 并保持模块可编译。",
+            status=TaskStatus.DEVELOPING,
+            analysis=RequirementAnalysis(
+                summary="更新常量", user_story="修改主模块",
+                acceptance_criteria=["编译通过"], assumptions=[],
+            ),
+            repository_analysis=RepositoryAnalysis(
+                language="python", file_count=2,
+                test_command="python -m py_compile main.py",
+                context_pack=RepositoryContextPack(primary_files=["main.py"]),
+            ),
+            technical_plan=TechnicalPlan(
+                approach="修改并验证", affected_files=["main.py"],
+                implementation_steps=["修改常量"],
+                test_plan=["python -m py_compile main.py"], risks=[],
+            ),
+        )
+        gateway = RepairGateway()
+
+        outcome = GenericDeveloperAgent(gateway).run(task, self.repository)
+
+        self.assertEqual(outcome.kind, "success")
+        self.assertEqual(gateway.proposals, 2)
+        self.assertEqual([attempt.exit_code for attempt in outcome.attempts], [1, 0])
+        self.assertEqual(
+            (self.repository / "main.py").read_text(encoding="utf-8"),
+            'VALUE = "new"\n',
+        )
+
     def test_context_tool_requires_arguments_for_selected_tool(self):
         from dev_agent.tools import DeveloperToolkit, ToolPolicy
 

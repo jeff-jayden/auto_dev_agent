@@ -6,6 +6,9 @@ from contextlib import nullcontext
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from dev_agent.domain.models import (
     DevelopmentAttempt,
@@ -30,6 +33,27 @@ class DeveloperRunOutcome:
     risk_reasons: list[str] = field(default_factory=list)
     error: str | None = None
     paused_at: str | None = None
+
+
+class DeveloperLoopState(TypedDict, total=False):
+    attempt_number: int
+    approved_proposal: DevelopmentProposal | None
+    repair_context: str
+    review_feedback: str
+    attempts: list[DevelopmentAttempt]
+    last_failure_signature: str | None
+    skip_apply: bool
+    resumed_changed_files: list[str]
+    audit_start: int
+    context: dict[str, str]
+    proposal: DevelopmentProposal
+    paths: list[str]
+    risk_level: str
+    changed_files: list[str]
+    execution: Any
+    diff: str
+    route: str
+    outcome: DeveloperRunOutcome
 
 
 class GenericDeveloperAgent:
@@ -175,7 +199,57 @@ class GenericDeveloperAgent:
                     f"Current test/build failure:\n{pending_failure[-8000:]}"
                 )
 
-        for attempt_number in range(start_attempt, self.max_attempts + 1):
+        return self._run_attempt_graph(
+            task=task,
+            toolkit=toolkit,
+            policy=policy,
+            test_command=test_command,
+            write_scope=write_scope,
+            session_context=session_context,
+            session_files=session_files,
+            step_context=step_context,
+            checkpoint_handler=checkpoint_handler,
+            high_risk_approved=high_risk_approved,
+            initial_state={
+                "attempt_number": start_attempt,
+                "approved_proposal": approved_proposal,
+                "repair_context": repair_context,
+                "review_feedback": review_feedback,
+                "attempts": attempts,
+                "last_failure_signature": last_failure_signature,
+                "skip_apply": skip_apply,
+                "resumed_changed_files": resumed_changed_files,
+            },
+        )
+
+    def _run_attempt_graph(
+        self,
+        *,
+        task: Task,
+        toolkit: DeveloperToolkit,
+        policy: ToolPolicy,
+        test_command: str,
+        write_scope: list[str],
+        session_context: dict[str, str],
+        session_files: list[str],
+        step_context: dict | None,
+        checkpoint_handler: Callable[[str, str, dict], bool] | None,
+        high_risk_approved: bool,
+        initial_state: DeveloperLoopState,
+    ) -> DeveloperRunOutcome:
+        """Run the bounded Developer repair loop as explicit LangGraph nodes."""
+        if initial_state["attempt_number"] > self.max_attempts:
+            return DeveloperRunOutcome(
+                kind="failed",
+                attempts=initial_state["attempts"],
+                error=f"Automatic repair exhausted after {self.max_attempts} attempts",
+            )
+
+        def prepare(state: DeveloperLoopState) -> dict:
+            attempt_number = state["attempt_number"]
+            attempts = state["attempts"]
+            repair_context = state.get("repair_context", "")
+            review_feedback = state.get("review_feedback", "")
             audit_start = len(toolkit.audit)
             context_pack = task.repository_analysis.context_pack
             context_paths = list(dict.fromkeys([
@@ -198,71 +272,109 @@ class GenericDeveloperAgent:
                     repair_context=repair_context,
                     review_feedback=review_feedback,
                 )
-            # One task-level Developer Session carries repository evidence
-            # across bounded implementation steps. Values are refreshed from
-            # disk above, so a later step sees earlier successful edits.
             session_context.update(context)
+            approved_proposal = state.get("approved_proposal")
             using_approved_proposal = approved_proposal is not None
             proposal = approved_proposal if using_approved_proposal else self._request_proposal(
-                task, context, test_command, attempt_number, repair_context, review_feedback,
-                allowed_files=write_scope, step_context=step_context,
+                task,
+                context,
+                test_command,
+                attempt_number,
+                repair_context,
+                review_feedback,
+                allowed_files=write_scope,
+                step_context=step_context,
             )
-            approved_proposal = None
             if proposal is None:
                 detail = getattr(self.model_gateway, "last_error", "")
                 suffix = f": {detail}" if detail else ""
-                return DeveloperRunOutcome(
-                    kind="failed",
-                    attempts=attempts,
-                    error=f"Model did not return a valid structured patch proposal{suffix}",
-                )
-
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="failed",
+                        attempts=attempts,
+                        error=f"Model did not return a valid structured patch proposal{suffix}",
+                    ),
+                }
             paths = [change.path for change in proposal.changes] + [
                 replacement.path for replacement in proposal.replacements
             ]
             risk = policy.assess_paths(paths)
             if risk.level == "forbidden":
-                return DeveloperRunOutcome(kind="failed", attempts=attempts, error="; ".join(risk.reasons))
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="failed", attempts=attempts, error="; ".join(risk.reasons)
+                    ),
+                }
             if risk.level == "high" and not (using_approved_proposal and high_risk_approved):
-                return DeveloperRunOutcome(
-                    kind="risk_approval",
-                    attempts=attempts,
-                    pending_proposal=proposal,
-                    risk_reasons=risk.reasons,
-                )
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="risk_approval",
+                        attempts=attempts,
+                        pending_proposal=proposal,
+                        risk_reasons=risk.reasons,
+                    ),
+                }
+            return {
+                "approved_proposal": None,
+                "audit_start": audit_start,
+                "context": context,
+                "proposal": proposal,
+                "paths": paths,
+                "risk_level": risk.level,
+                "route": "apply",
+            }
 
-            if checkpoint_handler and not skip_apply:
-                should_pause = checkpoint_handler(
-                    "proposal_ready",
-                    "apply_patch",
+        def apply_and_test(state: DeveloperLoopState) -> dict:
+            attempt_number = state["attempt_number"]
+            attempts = state["attempts"]
+            proposal = state["proposal"]
+            repair_context = state.get("repair_context", "")
+            review_feedback = state.get("review_feedback", "")
+            skip_apply = state.get("skip_apply", False)
+            if checkpoint_handler and not skip_apply and checkpoint_handler(
+                "proposal_ready",
+                "apply_patch",
+                {
+                    "proposal": proposal.model_dump(mode="json"),
+                    "attempt": attempt_number,
+                    "repair_context": repair_context,
+                    "review_feedback": review_feedback,
+                },
+            ):
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="paused", attempts=attempts, paused_at="proposal_ready"
+                    ),
+                }
+            try:
+                with self._span("tool.apply_proposal", attempt=attempt_number):
+                    changed_files = (
+                        state.get("resumed_changed_files", [])
+                        if skip_apply
+                        else toolkit.apply_proposal(proposal)
+                    )
+                if checkpoint_handler and checkpoint_handler(
+                    "patch_applied",
+                    "run_tests",
                     {
                         "proposal": proposal.model_dump(mode="json"),
                         "attempt": attempt_number,
-                        "repair_context": repair_context,
+                        "changed_files": changed_files,
                         "review_feedback": review_feedback,
                     },
-                )
-                if should_pause:
-                    return DeveloperRunOutcome(kind="paused", attempts=attempts, paused_at="proposal_ready")
-
-            try:
-                with self._span("tool.apply_proposal", attempt=attempt_number):
-                    changed_files = resumed_changed_files if skip_apply else toolkit.apply_proposal(proposal)
-                skip_apply = False
-                resumed_changed_files = []
-                if checkpoint_handler:
-                    should_pause = checkpoint_handler(
-                        "patch_applied",
-                        "run_tests",
-                        {
-                            "proposal": proposal.model_dump(mode="json"),
-                            "attempt": attempt_number,
-                            "changed_files": changed_files,
-                            "review_feedback": review_feedback,
-                        },
-                    )
-                    if should_pause:
-                        return DeveloperRunOutcome(kind="paused", attempts=attempts, paused_at="patch_applied")
+                ):
+                    return {
+                        "skip_apply": False,
+                        "resumed_changed_files": [],
+                        "route": "done",
+                        "outcome": DeveloperRunOutcome(
+                            kind="paused", attempts=attempts, paused_at="patch_applied"
+                        ),
+                    }
                 with self._span("tool.run_tests", command=proposal.test_command) as test_span:
                     execution = toolkit.run_tests(proposal.test_command)
                     if test_span is not None:
@@ -270,7 +382,16 @@ class GenericDeveloperAgent:
                 with self._span("tool.git_diff"):
                     diff = toolkit.diff()
                 session_context.update(toolkit.read_context(changed_files))
+                return {
+                    "skip_apply": False,
+                    "resumed_changed_files": [],
+                    "changed_files": changed_files,
+                    "execution": execution,
+                    "diff": diff,
+                    "route": "evaluate",
+                }
             except (PatchRejected, ValueError, OSError) as error:
+                paths = state["paths"]
                 failed_paths = list(dict.fromkeys(paths))
                 repair_context = (
                     "The previous proposal was rejected before application; none of its edits were written.\n"
@@ -279,21 +400,49 @@ class GenericDeveloperAgent:
                     "Do not repeat or cosmetically reformat the rejected proposal. Re-read the current "
                     "repository_context and choose the file that actually owns the missing behavior."
                 )
-                attempts.append(
-                    DevelopmentAttempt(
-                        attempt=attempt_number,
-                        summary=proposal.summary,
-                        changed_files=paths,
-                        test_command=[],
-                        exit_code=-1,
-                        output=repair_context,
-                        risk_level=risk.level,
-                        proposal=proposal,
-                        tool_calls=[*toolkit.audit[audit_start:], ToolCallAudit(tool="model_generate_patch", summary=f"生成第 {attempt_number} 次 Patch")],
-                    )
-                )
-                continue
+                attempts.append(DevelopmentAttempt(
+                    attempt=attempt_number,
+                    summary=proposal.summary,
+                    changed_files=paths,
+                    test_command=[],
+                    exit_code=-1,
+                    output=repair_context,
+                    risk_level=state["risk_level"],
+                    proposal=proposal,
+                    tool_calls=[
+                        *toolkit.audit[state["audit_start"]:],
+                        ToolCallAudit(
+                            tool="model_generate_patch",
+                            summary=f"生成第 {attempt_number} 次 Patch",
+                        ),
+                    ],
+                ))
+                next_attempt = attempt_number + 1
+                if next_attempt > self.max_attempts:
+                    return {
+                        "route": "done",
+                        "outcome": DeveloperRunOutcome(
+                            kind="failed",
+                            attempts=attempts,
+                            error=f"Automatic repair exhausted after {self.max_attempts} attempts",
+                        ),
+                    }
+                return {
+                    "attempt_number": next_attempt,
+                    "repair_context": repair_context,
+                    "skip_apply": False,
+                    "resumed_changed_files": [],
+                    "route": "retry",
+                }
 
+        def evaluate(state: DeveloperLoopState) -> dict:
+            attempt_number = state["attempt_number"]
+            attempts = state["attempts"]
+            proposal = state["proposal"]
+            execution = state["execution"]
+            diff = state["diff"]
+            changed_files = state["changed_files"]
+            review_feedback = state.get("review_feedback", "")
             attempt = DevelopmentAttempt(
                 attempt=attempt_number,
                 summary=proposal.summary,
@@ -302,9 +451,15 @@ class GenericDeveloperAgent:
                 exit_code=execution.exit_code,
                 output=execution.output,
                 diff=diff,
-                risk_level=risk.level,
+                risk_level=state["risk_level"],
                 proposal=proposal,
-                tool_calls=[*toolkit.audit[audit_start:], ToolCallAudit(tool="model_generate_patch", summary=f"生成第 {attempt_number} 次 Patch")],
+                tool_calls=[
+                    *toolkit.audit[state["audit_start"]:],
+                    ToolCallAudit(
+                        tool="model_generate_patch",
+                        summary=f"生成第 {attempt_number} 次 Patch",
+                    ),
+                ],
             )
             attempts.append(attempt)
             if execution.exit_code == 0 and diff:
@@ -327,27 +482,35 @@ class GenericDeveloperAgent:
                         "review_feedback": review_feedback,
                     },
                 ):
-                    return DeveloperRunOutcome(
-                        kind="paused", attempts=attempts, result=result, paused_at="test_result_saved"
+                    outcome = DeveloperRunOutcome(
+                        kind="paused",
+                        attempts=attempts,
+                        result=result,
+                        paused_at="test_result_saved",
                     )
-                return DeveloperRunOutcome(
-                    kind="success",
-                    attempts=attempts,
-                    result=result,
-                )
+                else:
+                    outcome = DeveloperRunOutcome(
+                        kind="success", attempts=attempts, result=result
+                    )
+                return {"route": "done", "outcome": outcome}
 
-            if len(execution.output) <= 6_000:
-                signature = execution.output
-            else:
-                signature = execution.output[:4_000] + "\n... output truncated ...\n" + execution.output[-2_000:]
-            if signature == last_failure_signature:
-                # Only discard the latest edit when it made no diagnostic
-                # progress. When the failure changes, keep the validated
-                # workspace change so the next attempt can fix the next error.
+            output = execution.output
+            signature = (
+                output
+                if len(output) <= 6_000
+                else output[:4_000] + "\n... output truncated ...\n" + output[-2_000:]
+            )
+            if signature == state.get("last_failure_signature"):
                 if proposal.replacements:
-                    toolkit.restore_files(context, changed_files)
-                return DeveloperRunOutcome(kind="failed", attempts=attempts, error="The same test failure repeated; automatic repair stopped early")
-            last_failure_signature = signature
+                    toolkit.restore_files(state["context"], changed_files)
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="failed",
+                        attempts=attempts,
+                        error="The same test failure repeated; automatic repair stopped early",
+                    ),
+                }
             repair_context = (
                 f"Previous proposal:\n{proposal.model_dump_json(indent=2)}\n"
                 f"Test command failed with exit code {execution.exit_code}:\n{signature}"
@@ -363,11 +526,51 @@ class GenericDeveloperAgent:
                     "review_feedback": review_feedback,
                 },
             ):
-                return DeveloperRunOutcome(
-                    kind="paused", attempts=attempts, paused_at="test_result_saved"
-                )
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="paused", attempts=attempts, paused_at="test_result_saved"
+                    ),
+                }
+            next_attempt = attempt_number + 1
+            if next_attempt > self.max_attempts:
+                return {
+                    "route": "done",
+                    "outcome": DeveloperRunOutcome(
+                        kind="failed",
+                        attempts=attempts,
+                        error=f"Automatic repair exhausted after {self.max_attempts} attempts",
+                    ),
+                }
+            return {
+                "attempt_number": next_attempt,
+                "last_failure_signature": signature,
+                "repair_context": repair_context,
+                "route": "retry",
+            }
 
-        return DeveloperRunOutcome(kind="failed", attempts=attempts, error=f"Automatic repair exhausted after {self.max_attempts} attempts")
+        graph = StateGraph(DeveloperLoopState)
+        graph.add_node("prepare", prepare)
+        graph.add_node("apply_and_test", apply_and_test)
+        graph.add_node("evaluate", evaluate)
+        graph.add_edge(START, "prepare")
+        graph.add_conditional_edges(
+            "prepare",
+            lambda state: state["route"],
+            {"apply": "apply_and_test", "done": END},
+        )
+        graph.add_conditional_edges(
+            "apply_and_test",
+            lambda state: state["route"],
+            {"evaluate": "evaluate", "retry": "prepare", "done": END},
+        )
+        graph.add_conditional_edges(
+            "evaluate",
+            lambda state: state["route"],
+            {"retry": "prepare", "done": END},
+        )
+        final_state = graph.compile(name="developer-repair-loop").invoke(initial_state)
+        return final_state["outcome"]
 
     def _request_proposal(
         self,
