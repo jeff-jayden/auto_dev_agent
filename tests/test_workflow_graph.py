@@ -69,6 +69,33 @@ class WorkflowStateStoreTests(unittest.TestCase):
         self.assertEqual(state["checkpoint_payload"]["changed_files"], ["src/App.js"])
         self.assertTrue(state["migrated_from_legacy"])
 
+    def test_new_checkpoint_is_written_to_graph_before_projection(self):
+        graph = WorkflowStateStore.memory()
+        task = Task(
+            id="checkpoint-task",
+            title="保存图检查点",
+            requirement="使用 LangGraph State 保存恢复信息",
+            status=TaskStatus.DEVELOPING,
+        )
+        graph.seed(task)
+        checkpoint = TaskCheckpoint(
+            id="checkpoint-graph",
+            task_id=task.id,
+            job_id="job-graph",
+            stage="test_result_saved",
+            next_action="generate_mr",
+            plan_hash="plan-hash",
+            diff_hash="diff-hash",
+            payload={"success": True},
+        )
+
+        graph.record_checkpoint(task, checkpoint)
+        restored = graph.latest_checkpoint(task)
+
+        self.assertEqual(restored.id, checkpoint.id)
+        self.assertEqual(restored.stage, "test_result_saved")
+        self.assertEqual(restored.payload, {"success": True})
+
 
 if __name__ == "__main__":
     unittest.main()

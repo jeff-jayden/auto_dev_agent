@@ -25,7 +25,11 @@ class WorkflowState(TypedDict, total=False):
     plan_hash: str | None
     workspace: str | None
     resume_stage: str | None
+    saved_checkpoint_id: str | None
+    saved_checkpoint_job_id: str | None
     next_action: str | None
+    diff_hash: str | None
+    saved_checkpoint_created_at: str | None
     checkpoint_payload: dict[str, Any]
     pending_human_action: str | None
     updated_at: str
@@ -107,7 +111,13 @@ class WorkflowStateStore:
             "plan_hash": task.metadata.get("plan_hash"),
             "workspace": task.workspace,
             "resume_stage": checkpoint.stage if checkpoint else None,
+            "saved_checkpoint_id": checkpoint.id if checkpoint else None,
+            "saved_checkpoint_job_id": checkpoint.job_id if checkpoint else None,
             "next_action": checkpoint.next_action if checkpoint else None,
+            "diff_hash": checkpoint.diff_hash if checkpoint else None,
+            "saved_checkpoint_created_at": (
+                checkpoint.created_at.isoformat() if checkpoint else None
+            ),
             "checkpoint_payload": dict(checkpoint.payload) if checkpoint else {},
             "pending_human_action": WAITING_ACTIONS.get(task.status),
             "updated_at": datetime.now(UTC).isoformat(),
@@ -167,6 +177,47 @@ class WorkflowStateStore:
                 self._config(task.id), update, as_node="project_state"
             )
         return self.get(task.id) or {**current, **update}
+
+    def record_checkpoint(self, task: Task, checkpoint: TaskCheckpoint) -> WorkflowState:
+        current = self.get(task.id) or self.seed(task)
+        update: WorkflowState = {
+            "revision": int(current.get("revision", 0)) + 1,
+            "baseline_sha": checkpoint.baseline_sha,
+            "plan_hash": checkpoint.plan_hash,
+            "workspace": checkpoint.workspace,
+            "resume_stage": checkpoint.stage,
+            "saved_checkpoint_id": checkpoint.id,
+            "saved_checkpoint_job_id": checkpoint.job_id,
+            "next_action": checkpoint.next_action,
+            "diff_hash": checkpoint.diff_hash,
+            "saved_checkpoint_created_at": checkpoint.created_at.isoformat(),
+            "checkpoint_payload": dict(checkpoint.payload),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        with self._lock:
+            self.graph.update_state(
+                self._config(task.id), update, as_node="project_state"
+            )
+        return self.get(task.id) or {**current, **update}
+
+    def latest_checkpoint(self, task: Task) -> TaskCheckpoint | None:
+        state = self.get(task.id)
+        if not state or not state.get("saved_checkpoint_id") or not state.get("resume_stage"):
+            return None
+        created_at = state.get("saved_checkpoint_created_at")
+        return TaskCheckpoint(
+            id=str(state["saved_checkpoint_id"]),
+            task_id=task.id,
+            job_id=str(state.get("saved_checkpoint_job_id") or "graph-migration"),
+            stage=str(state["resume_stage"]),
+            next_action=str(state.get("next_action") or "resume"),
+            workspace=state.get("workspace"),
+            baseline_sha=state.get("baseline_sha"),
+            plan_hash=str(state.get("plan_hash") or ""),
+            diff_hash=str(state.get("diff_hash") or ""),
+            payload=dict(state.get("checkpoint_payload") or {}),
+            **({"created_at": datetime.fromisoformat(created_at)} if created_at else {}),
+        )
 
     def migrate(self, tasks: list[Task], checkpoint_loader) -> int:
         migrated = 0

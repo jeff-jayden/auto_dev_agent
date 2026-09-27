@@ -99,7 +99,7 @@ class RecoveryCoordinator:
                 checks=checks,
             )
 
-        checkpoint = self.orchestrator.store.latest_checkpoint(task_id)
+        checkpoint = self.orchestrator.latest_workflow_checkpoint(task_id)
         if checkpoint is None:
             checks.append(RecoveryCheck(
                 name="持久化检查点",

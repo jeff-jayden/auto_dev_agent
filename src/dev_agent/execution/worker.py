@@ -122,7 +122,7 @@ class TaskExecutionWorker:
         task = orchestrator.store.get_task(previous.task_id)
         if task is None:
             raise KeyError(previous.task_id)
-        checkpoint = orchestrator.store.latest_checkpoint(previous.task_id)
+        checkpoint = orchestrator.latest_workflow_checkpoint(previous.task_id)
         resumable = {
             TaskStatus.WAITING_REQUIREMENT_APPROVAL,
             TaskStatus.DEVELOPING,
@@ -605,7 +605,7 @@ class TaskExecutionWorker:
         task = orchestrator.store.get_task(job.task_id)
         if task is None:
             raise KeyError(job.task_id)
-        checkpoint = orchestrator.store.latest_checkpoint(job.task_id)
+        checkpoint = orchestrator.latest_workflow_checkpoint(job.task_id)
         if checkpoint is not None:
             return orchestrator.resume_from_checkpoint(
                 job.task_id,

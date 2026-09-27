@@ -1623,7 +1623,7 @@ class TaskOrchestrator:
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
         task = self._require_task(task_id)
-        checkpoint = self.store.latest_checkpoint(task_id)
+        checkpoint = self.latest_workflow_checkpoint(task_id)
         if checkpoint is None:
             raise ValueError("No durable checkpoint is available for this task")
         self._validate_checkpoint(task, checkpoint)
@@ -1862,6 +1862,9 @@ class TaskOrchestrator:
                 diff_hash=hashlib.sha256(diff.encode("utf-8")).hexdigest(),
                 payload=payload,
             )
+            # LangGraph is the execution-state source. The legacy checkpoint
+            # row is retained only as an API/history projection during cut-over.
+            self.workflow_state.record_checkpoint(task, checkpoint)
             self.store.save_checkpoint(checkpoint)
             self._event(
                 task,
@@ -1952,11 +1955,18 @@ class TaskOrchestrator:
         return task
 
     def _transition(self, task: Task, target: TaskStatus) -> None:
-        checkpoint = self.store.latest_checkpoint(task.id)
+        checkpoint = self.workflow_state.latest_checkpoint(task)
         self.workflow_state.transition(task, target, checkpoint=checkpoint)
         task.status = target
         task.updated_at = datetime.now(UTC)
         self.store.save_task(task)
+
+    def latest_workflow_checkpoint(self, task_id: str) -> TaskCheckpoint | None:
+        task = self._require_task(task_id)
+        return (
+            self.workflow_state.latest_checkpoint(task)
+            or self.store.latest_checkpoint(task_id)
+        )
 
     def _event(self, task: Task, event_type: str, message: str, payload: dict | None = None) -> None:
         self.store.add_event(
