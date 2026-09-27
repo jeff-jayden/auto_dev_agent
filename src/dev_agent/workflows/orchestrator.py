@@ -1997,10 +1997,7 @@ class TaskOrchestrator:
 
     def latest_workflow_checkpoint(self, task_id: str) -> TaskCheckpoint | None:
         task = self._require_task(task_id)
-        return (
-            self.workflow_state.latest_checkpoint(task)
-            or self.store.latest_checkpoint(task_id)
-        )
+        return self.workflow_state.latest_checkpoint(task)
 
     def _event(self, task: Task, event_type: str, message: str, payload: dict | None = None) -> None:
         self.store.add_event(
