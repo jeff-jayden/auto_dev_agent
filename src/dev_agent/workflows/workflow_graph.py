@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from dev_agent.domain.models import Task, TaskCheckpoint, TaskStatus
 
@@ -123,6 +124,7 @@ class WorkflowState(TypedDict, total=False):
     updated_at: str
     migrated_from_legacy: bool
     projection_reconciliations: int
+    last_human_decision: dict[str, Any]
 
 
 WAITING_ACTIONS = {
@@ -140,6 +142,24 @@ def _project_state(state: WorkflowState) -> WorkflowState:
     return state
 
 
+def _await_human_action(state: WorkflowState) -> WorkflowState:
+    decision = interrupt({
+        "task_id": state["task_id"],
+        "phase": state["phase"],
+        "action": state.get("pending_human_action"),
+        "revision": state.get("revision", 0),
+    })
+    return {
+        "last_human_decision": dict(decision),
+        "pending_human_action": None,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _route_after_projection(state: WorkflowState) -> str:
+    return "await_human_action" if state.get("pending_human_action") else "done"
+
+
 class WorkflowStateStore:
     """LangGraph-backed source of truth for task execution phase.
 
@@ -151,8 +171,14 @@ class WorkflowStateStore:
     def __init__(self, checkpointer, connection: sqlite3.Connection | None = None):
         builder = StateGraph(WorkflowState)
         builder.add_node("project_state", _project_state)
+        builder.add_node("await_human_action", _await_human_action)
         builder.add_edge(START, "project_state")
-        builder.add_edge("project_state", END)
+        builder.add_conditional_edges(
+            "project_state",
+            _route_after_projection,
+            {"await_human_action": "await_human_action", "done": END},
+        )
+        builder.add_edge("await_human_action", END)
         self.graph = builder.compile(checkpointer=checkpointer, name="task-workflow")
         self._connection = connection
         self._lock = RLock()
@@ -244,6 +270,17 @@ class WorkflowStateStore:
             current = self.get(task.id) or current
             current_phase = task.status
         ensure_workflow_transition(current_phase, target)
+        if current.get("pending_human_action"):
+            with self._lock:
+                self.graph.invoke(
+                    Command(resume={
+                        "target": target.value,
+                        "action": current["pending_human_action"],
+                        "resumed_at": datetime.now(UTC).isoformat(),
+                    }),
+                    self._config(task.id),
+                )
+            current = self.get(task.id) or current
         update: WorkflowState = {
             "phase": target.value,
             "revision": int(current.get("revision", 0)) + 1,
@@ -265,6 +302,16 @@ class WorkflowStateStore:
                 self._config(task.id), update, as_node="project_state"
             )
         return self.get(task.id) or {**current, **update}
+
+    def pending_human_action(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            snapshot = self.graph.get_state(self._config(task_id))
+        if not snapshot or "await_human_action" not in snapshot.next:
+            return None
+        interrupts = getattr(snapshot, "interrupts", ())
+        if not interrupts:
+            return None
+        return dict(interrupts[0].value)
 
     def record_checkpoint(self, task: Task, checkpoint: TaskCheckpoint) -> WorkflowState:
         current = self.get(task.id) or self.seed(task)

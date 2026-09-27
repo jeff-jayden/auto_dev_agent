@@ -96,6 +96,29 @@ class WorkflowStateStoreTests(unittest.TestCase):
         self.assertEqual(restored.stage, "test_result_saved")
         self.assertEqual(restored.payload, {"success": True})
 
+    def test_waiting_phase_is_durable_interrupt_and_transition_resumes_it(self):
+        graph = WorkflowStateStore.memory()
+        task = Task(
+            id="human-action-task",
+            title="等待人工审批",
+            requirement="审批后继续执行",
+            status=TaskStatus.WAITING_REQUIREMENT_APPROVAL,
+        )
+
+        graph.seed(task)
+
+        pending = graph.pending_human_action(task.id)
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["action"], "requirement_approval")
+        self.assertEqual(pending["phase"], "waiting_requirement_approval")
+
+        state = graph.transition(task, TaskStatus.PLAN_APPROVED)
+
+        self.assertEqual(state["phase"], "plan_approved")
+        self.assertIsNone(state["pending_human_action"])
+        self.assertEqual(state["last_human_decision"]["target"], "plan_approved")
+        self.assertIsNone(graph.pending_human_action(task.id))
+
 
 if __name__ == "__main__":
     unittest.main()
