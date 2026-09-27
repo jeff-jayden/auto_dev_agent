@@ -30,7 +30,7 @@ from dev_agent.evaluation import GoldenCaseEvaluator
 from dev_agent.repository import RepositoryAnalyzer, RepositoryCatalog
 from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubClient, GitHubDeliveryService
-from dev_agent.workflows import RecoveryCoordinator, TaskOrchestrator
+from dev_agent.workflows import RecoveryCoordinator, TaskOrchestrator, WorkflowStateStore
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
 
 
@@ -93,6 +93,15 @@ def build_orchestrator(
     )
     tracer = TraceRecorder(store)
     gateway = TracingModelGateway(model_gateway or build_model_gateway(), tracer)
+    # Tests and explicitly isolated orchestrators do not outlive the process
+    # call that created them. The desktop service uses the durable SQLite
+    # checkpointer; isolated instances use memory so Windows can remove their
+    # temporary directories without an open SQLite handle.
+    workflow_state = (
+        WorkflowStateStore.sqlite(runtime / "agent.db")
+        if runtime_root is None
+        else WorkflowStateStore.memory()
+    )
     result = TaskOrchestrator(
         store,
         LocalPlanningAgent(gateway, tracer=tracer),
@@ -113,6 +122,7 @@ def build_orchestrator(
             os.getenv("FIGMA_MCP_URL", ""), runtime / "designs"
         ),
         ui_acceptance_service=UIAcceptanceService(runtime / "ui-acceptance"),
+        workflow_state=workflow_state,
     )
     result.repository_catalog = catalog
     return result

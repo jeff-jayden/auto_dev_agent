@@ -27,12 +27,12 @@ from dev_agent.domain.models import (
     TaskStatus,
     ReplayResult,
 )
-from dev_agent.domain.state_machine import ensure_transition
 from dev_agent.infrastructure.store import SQLiteTaskStore
 from dev_agent.repository import RepositoryAnalyzer
 from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubDeliveryService
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
+from .workflow_graph import WorkflowStateStore
 
 
 class TaskOrchestrator:
@@ -50,6 +50,7 @@ class TaskOrchestrator:
         tracer=None,
         figma_client: FigmaMCPClient | None = None,
         ui_acceptance_service: UIAcceptanceService | None = None,
+        workflow_state: WorkflowStateStore | None = None,
     ):
         self.store = store
         self.planner = planner
@@ -63,6 +64,8 @@ class TaskOrchestrator:
         self.tracer = tracer
         self.figma_client = figma_client
         self.ui_acceptance_service = ui_acceptance_service
+        self.workflow_state = workflow_state or WorkflowStateStore.memory()
+        self.workflow_state.migrate(self.store.list_tasks(), self.store.latest_checkpoint)
 
     def create_task(
         self,
@@ -1949,7 +1952,8 @@ class TaskOrchestrator:
         return task
 
     def _transition(self, task: Task, target: TaskStatus) -> None:
-        ensure_transition(task.status, target)
+        checkpoint = self.store.latest_checkpoint(task.id)
+        self.workflow_state.transition(task, target, checkpoint=checkpoint)
         task.status = target
         task.updated_at = datetime.now(UTC)
         self.store.save_task(task)
