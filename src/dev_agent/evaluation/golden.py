@@ -4,7 +4,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from dev_agent.domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus
-from dev_agent.domain.state_machine import ensure_transition
+from dev_agent.workflows.workflow_graph import ensure_workflow_transition
 from dev_agent.observability import TraceRecorder
 from dev_agent.repository.catalog import RepositoryCatalog
 
@@ -55,7 +55,7 @@ class GoldenCaseEvaluator:
     @staticmethod
     def _state_machine_rejects_skip() -> str:
         try:
-            ensure_transition(TaskStatus.WAITING_REQUIREMENT_APPROVAL, TaskStatus.TESTING)
+            ensure_workflow_transition(TaskStatus.WAITING_REQUIREMENT_APPROVAL, TaskStatus.TESTING)
         except ValueError:
             return "Illegal stage skip rejected"
         raise AssertionError("illegal transition was accepted")
