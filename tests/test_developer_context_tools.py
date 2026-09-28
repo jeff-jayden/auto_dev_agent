@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 
 from dev_agent.agents.context_explorer import ContextToolDecision
 from dev_agent.agents.context_explorer import DeveloperContextExplorer
-from dev_agent.agents.langchain_tools import DeveloperContextToolRegistry
+from dev_agent.agents.context_explorer import DeveloperContextToolRegistry
 from dev_agent.agents.generic_developer import GenericDeveloperAgent
 from dev_agent.domain.models import (
     RepositoryAnalysis,
