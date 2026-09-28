@@ -1,3 +1,8 @@
+"""Agent 可观测性与调用追踪。
+
+记录 Agent、LLM 和工具调用的嵌套 Span、耗时与 Token 指标，同时对敏感字段进行脱敏。
+"""
+
 from __future__ import annotations
 
 import hashlib

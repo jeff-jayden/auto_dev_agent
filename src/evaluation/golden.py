@@ -1,3 +1,8 @@
+"""端到端 Golden Cases 评测入口。
+
+运行不修改仓库、不调用模型的确定性契约用例，并汇总流程稳定性和检索评测结果。
+"""
+
 from __future__ import annotations
 
 from time import perf_counter

@@ -1,3 +1,8 @@
+"""中断任务恢复诊断器。
+
+检查 Worker 租约、任务阶段和持久化检查点，判断任务能否安全续跑以及是否需要人工确认。
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

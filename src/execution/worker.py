@@ -1,3 +1,8 @@
+"""后台任务执行 Worker。
+
+负责领取执行 Job、维护租约和心跳、处理暂停取消与恢复，并将动作分派给工作流编排器。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

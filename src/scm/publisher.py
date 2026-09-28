@@ -1,3 +1,8 @@
+"""GitHub 交付服务。
+
+将已审查的工作区修改提交并推送到 Agent 分支，创建或更新 PR、同步评论并执行用户批准后的合并。
+"""
+
 from __future__ import annotations
 
 import base64

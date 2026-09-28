@@ -1,3 +1,8 @@
+"""LangGraph 工作流状态与路由定义。
+
+维护唯一的任务阶段状态、合法迁移、人工中断和持久化检查点，并编排需求、开发、MR 与审查节点。
+"""
+
 from __future__ import annotations
 
 import sqlite3

@@ -1,3 +1,8 @@
+"""UI 设计验收服务。
+
+读取 Figma MCP 设计上下文并对浏览器截图执行视觉检查，为任务和 MR 生成 UI 验收证据。
+"""
+
 from __future__ import annotations
 
 import base64

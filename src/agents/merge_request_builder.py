@@ -1,3 +1,8 @@
+"""Merge Request 草稿构建器。
+
+将任务结果、修改文件、测试证据和审查结论整理为可发布的 MR 标题与描述；本模块不调用模型。
+"""
+
 from __future__ import annotations
 
 import re

@@ -1,3 +1,8 @@
+"""Agent 工具调用策略。
+
+校验可写文件范围、禁止访问的敏感路径、修改风险等级以及允许执行的测试命令。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

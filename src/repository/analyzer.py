@@ -1,3 +1,8 @@
+"""仓库事实分析器。
+
+识别语言、框架、分支、测试命令和文件结构，并调用代码索引生成与当前需求相关的上下文包。
+"""
+
 from __future__ import annotations
 
 import re

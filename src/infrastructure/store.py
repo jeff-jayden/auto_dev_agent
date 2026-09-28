@@ -1,3 +1,8 @@
+"""SQLite 持久化仓储。
+
+保存任务、事件、执行 Job、检查点、Trace 和评测结果，并提供队列领取、心跳及恢复所需的原子操作。
+"""
+
 from __future__ import annotations
 
 import json

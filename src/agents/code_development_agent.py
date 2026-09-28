@@ -1,3 +1,8 @@
+"""代码开发 Agent。
+
+根据技术方案自主探索仓库、生成并应用修改、运行测试和修复失败，返回可恢复的开发结果。
+"""
+
 from __future__ import annotations
 
 import json

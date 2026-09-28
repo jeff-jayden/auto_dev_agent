@@ -1,3 +1,8 @@
+"""需求规划 Agent。
+
+结合用户需求、仓库事实和设计上下文生成需求分析、影响文件范围及分步技术方案。
+"""
+
 import json
 from contextlib import nullcontext
 from pathlib import Path

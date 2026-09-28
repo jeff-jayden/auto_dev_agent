@@ -1,3 +1,8 @@
+"""仓库探索 Agent。
+
+向代码开发 Agent 暴露只读搜索、文件读取和 Git 历史工具，让模型按需补充开发上下文。
+"""
+
 from __future__ import annotations
 
 import json

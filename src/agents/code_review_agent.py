@@ -1,3 +1,8 @@
+"""代码审查 Agent。
+
+结合需求、技术方案、累计 Diff 和测试证据识别阻塞问题，并驱动审查与修复循环。
+"""
+
 from __future__ import annotations
 
 import json

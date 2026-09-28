@@ -1,3 +1,8 @@
+"""大模型访问网关。
+
+统一 OpenAI Compatible、DeepSeek 和 Ollama 的结构化生成接口，并根据环境配置构建模型客户端。
+"""
+
 from __future__ import annotations
 
 import json

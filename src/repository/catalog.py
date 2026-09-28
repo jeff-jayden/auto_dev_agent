@@ -1,3 +1,8 @@
+"""仓库注册与目录管理服务。
+
+校验本地或 GitHub 仓库来源、维护仓库配置，并将远端仓库安全克隆到本地缓存目录。
+"""
+
 from __future__ import annotations
 
 import base64

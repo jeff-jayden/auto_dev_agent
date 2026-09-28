@@ -1,3 +1,8 @@
+"""系统核心领域模型。
+
+集中定义任务、方案、开发结果、审查、检查点、可观测性和远端 PR 等跨层数据契约。
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

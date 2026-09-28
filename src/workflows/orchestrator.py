@@ -1,3 +1,8 @@
+"""需求交付流程编排器。
+
+连接 Agent、仓库、工作区、检查点、GitHub 和 UI 验收服务，实现从需求创建到 PR 合入的业务动作。
+"""
+
 from __future__ import annotations
 
 import hashlib

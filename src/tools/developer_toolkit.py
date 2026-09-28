@@ -1,3 +1,8 @@
+"""代码开发工具集。
+
+为开发 Agent 提供受控的上下文读取、文本替换、补丁应用、测试执行和 Git Diff 获取能力。
+"""
+
 from __future__ import annotations
 
 import os

@@ -1,3 +1,8 @@
+"""任务隔离工作区管理器。
+
+基于批准时的 Git 基线创建独立 Worktree，并提供测试执行、Diff 读取和默认分支同步能力。
+"""
+
 from __future__ import annotations
 
 import os

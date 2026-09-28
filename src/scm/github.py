@@ -1,3 +1,8 @@
+"""GitHub API 客户端。
+
+封装 Pull Request、评论、审查和合并相关的 HTTP/GraphQL 请求，不包含任务层业务判断。
+"""
+
 from __future__ import annotations
 
 import json

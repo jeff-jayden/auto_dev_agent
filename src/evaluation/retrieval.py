@@ -1,3 +1,8 @@
+"""RAG 检索效果评测器。
+
+使用固定数据集对比关键词检索与混合检索，计算 Recall@K、MRR、Hit@K 和无关结果比例。
+"""
+
 from __future__ import annotations
 
 import re
