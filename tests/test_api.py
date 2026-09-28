@@ -181,3 +181,23 @@ class ApiTests(unittest.TestCase):
                     self.assertIn("正在后台执行", rerun.json()["detail"])
                     self.assertEqual(approve.status_code, 409)
                     self.assertIn("不能同时人工批准", approve.json()["detail"])
+
+    def test_rerun_review_returns_a_background_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = build_orchestrator(Path(directory) / "runtime")
+            with patch.object(main, "orchestrator", isolated), \
+                    patch.object(main.execution_worker, "start"):
+                with TestClient(main.app) as client:
+                    task = isolated.create_task(
+                        "异步重新审查",
+                        "重新审查应进入后台队列并由前端监听进度。",
+                    )
+                    task.status = TaskStatus.CHANGE_READY
+                    isolated.store.save_task(task)
+
+                    response = client.post(f"/api/tasks/{task.id}/review/run")
+
+                    self.assertEqual(response.status_code, 202)
+                    job = response.json()
+                    self.assertEqual(job["action"], "run_review")
+                    self.assertEqual(job["status"], "queued")

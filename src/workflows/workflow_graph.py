@@ -487,8 +487,19 @@ class TaskDeliveryGraph:
         })
         return result["task"]
 
-    def review(self, task_id: str) -> Task:
-        result = self.graph.invoke({"action": "review", "task_id": task_id})
+    def review(
+        self,
+        task_id: str,
+        *,
+        checkpoint_job_id: str | None = None,
+        should_pause: Callable[[], bool] | None = None,
+    ) -> Task:
+        result = self.graph.invoke({
+            "action": "review",
+            "task_id": task_id,
+            "checkpoint_job_id": checkpoint_job_id,
+            "should_pause": should_pause,
+        })
         return result["task"]
 
     @staticmethod

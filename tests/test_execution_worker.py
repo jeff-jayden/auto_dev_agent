@@ -10,6 +10,24 @@ from domain.models import TaskStatus
 
 
 class ExecutionWorkerCheckpointTests(unittest.TestCase):
+    def test_code_review_is_queued_as_a_background_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            orchestrator = build_orchestrator(Path(directory) / "runtime")
+            task = orchestrator.create_task(
+                "后台重新审查", "将重新审查放入 Worker 队列并实时展示执行信息。"
+            )
+            task.status = TaskStatus.CHANGE_READY
+            orchestrator.store.save_task(task)
+            worker = TaskExecutionWorker(lambda: orchestrator, poll_interval=60)
+            worker.start = lambda: None
+
+            job = worker.enqueue_review(task.id, "tester")
+
+            self.assertEqual(job.action, "run_review")
+            self.assertEqual(job.status, "queued")
+            events = orchestrator.store.list_events(task.id)
+            self.assertEqual(events[-1].event_type, "review_queued")
+
     def test_user_feedback_is_queued_for_same_task(self):
         with tempfile.TemporaryDirectory() as directory:
             orchestrator = build_orchestrator(Path(directory) / "runtime")

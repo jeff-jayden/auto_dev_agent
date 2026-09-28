@@ -436,7 +436,15 @@ class TaskOrchestrator:
         repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
-        return {"task": task, "repository": repository}
+        return {
+            "task": task,
+            "repository": repository,
+            "checkpoint_handler": self._checkpoint_handler(
+                task,
+                state.get("checkpoint_job_id"),
+                state.get("should_pause"),
+            ),
+        }
 
     def _graph_generate_mr(self, state: TaskDeliveryState) -> dict:
         task = state["task"]
@@ -819,8 +827,18 @@ class TaskOrchestrator:
             return DevelopmentRunOutcome(kind="failed", attempts=all_attempts, error="No development step produced a result")
         return DevelopmentRunOutcome(kind="success", attempts=all_attempts, result=latest_result)
 
-    def run_review(self, task_id: str) -> Task:
-        return self.delivery_graph.review(task_id)
+    def run_review(
+        self,
+        task_id: str,
+        *,
+        job_id: str | None = None,
+        should_pause: Callable[[], bool] | None = None,
+    ) -> Task:
+        return self.delivery_graph.review(
+            task_id,
+            checkpoint_job_id=job_id,
+            should_pause=should_pause,
+        )
 
     def apply_user_feedback(
         self,

@@ -255,6 +255,40 @@ class TaskExecutionWorker:
         self._wake.set()
         return job
 
+    def enqueue_review(self, task_id: str, actor: str = "system") -> ExecutionJob:
+        """Queue a Code Review so its events and traces use the normal Job lifecycle."""
+        orchestrator = self._orchestrator_provider()
+        active = next((
+            item for item in orchestrator.store.list_jobs(task_id)
+            if item.status in {"queued", "running", "pause_requested"}
+        ), None)
+        if active:
+            raise ValueError(
+                f"Code Review 正在后台执行（Job {active.id}），请等待当前执行结束"
+            )
+        task = orchestrator.store.get_task(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        if task.status not in {TaskStatus.CHANGE_READY, TaskStatus.CHANGES_REQUESTED}:
+            raise ValueError("Task is not ready for code review")
+        candidate = ExecutionJob(
+            id=uuid4().hex[:16],
+            task_id=task_id,
+            action="run_review",
+            payload={"actor": actor},
+        )
+        job = orchestrator.store.enqueue_job(candidate)
+        if job.id == candidate.id:
+            orchestrator.store.add_event(TaskEvent(
+                task_id=task_id,
+                event_type="review_queued",
+                message="Code Review 已进入后台执行队列",
+                payload={"job_id": job.id, "actor": actor},
+            ))
+        self.start()
+        self._wake.set()
+        return job
+
     def enqueue_user_feedback(
         self, task_id: str, actor: str, feedback: str
     ) -> ExecutionJob:
@@ -485,6 +519,12 @@ class TaskExecutionWorker:
                 task = orchestrator.retry_failed_task(
                     job.task_id,
                     job.id,
+                    should_pause=lambda: self._pause_requested(orchestrator, job.id),
+                )
+            elif job.action == "run_review":
+                task = orchestrator.run_review(
+                    job.task_id,
+                    job_id=job.id,
                     should_pause=lambda: self._pause_requested(orchestrator, job.id),
                 )
             elif job.action == "user_feedback":

@@ -211,7 +211,7 @@ function setView(view) {
     button.classList.toggle("active", view !== "create" && button.dataset.view === view);
   });
   updateNavigationAvailability();
-  if (view === "observability" && currentTask && observabilityTaskId !== currentTask.id) {
+  if (view === "observability" && currentTask) {
     observabilityTaskId = currentTask.id;
     renderObservability(currentTask.id).catch((error) => {
       observabilityTaskId = null;
@@ -644,7 +644,7 @@ async function watchJob(job) {
   const lastEventId = existingEvents.length ? existingEvents[existingEvents.length - 1].id : 0;
   const stream = new EventSource(`/api/tasks/${job.task_id}/stream?after=${lastEventId}`);
   let refreshPending = false;
-  stream.addEventListener("task_event", async () => {
+  const refreshWatchedTask = async () => {
     if (refreshPending || generation !== watchGeneration) return;
     refreshPending = true;
     try {
@@ -655,7 +655,9 @@ async function watchJob(job) {
     } finally {
       refreshPending = false;
     }
-  });
+  };
+  stream.addEventListener("task_event", refreshWatchedTask);
+  let nextTaskRefreshAt = Date.now() + 1200;
   try {
     while (generation === watchGeneration) {
       const latest = await api(`/api/jobs/${job.id}`);
@@ -669,6 +671,10 @@ async function watchJob(job) {
         if (latest.status === "failed") notify(`后台执行失败：${latest.error || "未知错误"}`);
         if (latest.status === "cancelled") notify("后台执行已取消");
         break;
+      }
+      if (Date.now() >= nextTaskRefreshAt) {
+        await refreshWatchedTask();
+        nextTaskRefreshAt = Date.now() + 1200;
       }
       await new Promise((resolve) => setTimeout(resolve, 700));
     }
@@ -886,10 +892,6 @@ async function render(task) {
   $("#sync-github-comments-button").disabled = !pullRequest || task.status === "merged";
   $("#process-github-comments-button").disabled = task.status !== "waiting_merge_approval" || !githubComments.some((item) => ["pending", "failed"].includes(item.status));
   if (currentJob && currentJob.task_id === task.id) renderJob(currentJob);
-  if (activeView === "observability") {
-    observabilityTaskId = task.id;
-    await renderObservability(task.id);
-  }
   const knownIndex = knownTasks.findIndex((item) => item.id === task.id);
   if (knownIndex >= 0) knownTasks[knownIndex] = task;
   else knownTasks.unshift(task);
@@ -939,9 +941,15 @@ $("#new-task-button").addEventListener("click", showNewTask);
 $("#empty-new-task-button").addEventListener("click", showNewTask);
 document.querySelectorAll(".rail-new-task").forEach((button) => button.addEventListener("click", showNewTask));
 $("#cancel-create-button").addEventListener("click", () => setView(currentTask ? "requirement" : "requirement"));
-document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => {
+document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", async () => {
   if (button.disabled) return;
   setView(button.dataset.view);
+  if (button.dataset.view === "attempts" && currentTask) {
+    try {
+      const task = await api(`/api/tasks/${currentTask.id}`);
+      if (activeView === "attempts" && currentTask?.id === task.id) await render(task);
+    } catch (error) { notify(error.message); }
+  }
 }));
 $("#rerun-task-button").addEventListener("click", async () => {
   if (!currentTask) return;
@@ -1111,8 +1119,10 @@ $("#rerun-review-button").addEventListener("click", async () => {
   button.disabled = true;
   button.textContent = "正在重新审查…";
   try {
-    const task = await api("/api/tasks/" + currentTask.id + "/review/run", {method: "POST"});
-    await render(task); notify("Code Review 已重新执行");
+    const job = await api("/api/tasks/" + currentTask.id + "/review/run", {method: "POST"});
+    renderJob(job);
+    notify("Code Review 已进入后台队列");
+    await watchJob(job);
   } catch (error) { notify(error.message); }
   finally {
     renderReviewGate(currentTask);

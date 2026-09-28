@@ -571,21 +571,10 @@ def get_reviews(task_id: str):
     return task.reviews
 
 
-@app.post("/api/tasks/{task_id}/review/run")
+@app.post("/api/tasks/{task_id}/review/run", status_code=202)
 def run_review(task_id: str):
     try:
-        active_job = next(
-            (
-                job for job in orchestrator.store.list_jobs(task_id)
-                if job.status in {"queued", "running", "pause_requested"}
-            ),
-            None,
-        )
-        if active_job:
-            raise ValueError(
-                f"Code Review 正在后台执行（Job {active_job.id}），请等待当前执行结束"
-            )
-        return orchestrator.run_review(task_id)
+        return execution_worker.enqueue_review(task_id, "web-user")
     except KeyError:
         raise HTTPException(status_code=404, detail="Task not found") from None
     except ValueError as error:
