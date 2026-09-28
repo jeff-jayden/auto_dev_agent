@@ -35,8 +35,7 @@ from dev_agent.repository import RepositoryAnalyzer
 from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubDeliveryService
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
-from .workflow_graph import WorkflowStateStore
-from .task_graph import TaskDeliveryGraph, TaskDeliveryState
+from .workflow_graph import TaskDeliveryGraph, TaskDeliveryState, WorkflowStateStore
 
 
 class ReviewLoopState(TypedDict, total=False):
