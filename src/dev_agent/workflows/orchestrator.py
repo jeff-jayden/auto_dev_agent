@@ -36,6 +36,7 @@ from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubDeliveryService
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
 from .workflow_graph import WorkflowStateStore
+from .task_graph import TaskDeliveryGraph, TaskDeliveryState
 
 
 class ReviewLoopState(TypedDict, total=False):
@@ -75,6 +76,7 @@ class TaskOrchestrator:
         self.ui_acceptance_service = ui_acceptance_service
         self.workflow_state = workflow_state or WorkflowStateStore.memory()
         self.workflow_state.migrate(self.store.list_tasks(), self.store.latest_checkpoint)
+        self.delivery_graph = TaskDeliveryGraph(self)
 
     def create_task(
         self,
@@ -363,16 +365,26 @@ class TaskOrchestrator:
         checkpoint_job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
-        task = self._require_task(task_id)
+        return self.delivery_graph.approve(
+            task_id,
+            actor,
+            comment,
+            checkpoint_job_id=checkpoint_job_id,
+            should_pause=should_pause,
+        )
+
+    def _graph_approve_plan(self, state: TaskDeliveryState) -> dict:
+        task = self._require_task(state["task_id"])
         if task.status != TaskStatus.WAITING_REQUIREMENT_APPROVAL:
             raise ValueError("Only a task waiting for approval can be approved")
-
-        repository_config = self.store.get_repository(task.repository_id or "demo")
-        if repository_config is None:
+        repository = self.store.get_repository(task.repository_id or "demo")
+        if repository is None:
             raise ValueError("Repository not found")
-        if self._replan_if_repository_changed(task, repository_config):
-            return task
+        if self._replan_if_repository_changed(task, repository):
+            return {"task": task, "repository": repository, "route": "done"}
 
+        actor = state["actor"]
+        comment = state.get("comment", "")
         task.approval = Approval(decision="approved", actor=actor, comment=comment)
         task.metadata["approved_plan_hash"] = self._technical_plan_hash(task)
         task.metadata["development_head_sha"] = (
@@ -380,31 +392,87 @@ class TaskOrchestrator:
         )
         task.metadata["approved_index_version"] = task.metadata.get("index_version")
         self.store.save_task(task)
-        if repository_config.execution_mode == "plan_only":
-            self._transition(task, TaskStatus.DEVELOPING)
-            self._event(
-                task,
-                "approved",
-                f"{actor} 已批准技术方案，开始创建隔离 Worktree",
-                {"comment": comment},
-            )
-            handler = self._checkpoint_handler(task, checkpoint_job_id, should_pause)
-            if handler and handler("plan_approved", "prepare_workspace", {}):
-                return task
-            return self._run_real_development(
-                task, repository_config, checkpoint_handler=handler
-            )
         self._transition(task, TaskStatus.DEVELOPING)
-        self._event(task, "approved", f"{actor} 已批准技术方案", {"comment": comment})
-        handler = self._checkpoint_handler(task, checkpoint_job_id, should_pause)
+        message = (
+            f"{actor} 已批准技术方案，开始创建隔离 Worktree"
+            if repository.execution_mode == "plan_only"
+            else f"{actor} 已批准技术方案"
+        )
+        self._event(task, "approved", message, {"comment": comment})
+        handler = self._checkpoint_handler(
+            task, state.get("checkpoint_job_id"), state.get("should_pause")
+        )
         if handler and handler("plan_approved", "prepare_workspace", {}):
-            return task
+            return {
+                "task": task,
+                "repository": repository,
+                "checkpoint_handler": handler,
+                "route": "done",
+            }
+        return {
+            "task": task,
+            "repository": repository,
+            "checkpoint_handler": handler,
+            "route": "develop",
+        }
 
+    def _graph_develop(self, state: TaskDeliveryState) -> dict:
+        task = state["task"]
+        repository = state["repository"]
+        handler = state.get("checkpoint_handler")
+        if repository.execution_mode == "plan_only":
+            task = self._run_real_development(
+                task,
+                repository,
+                checkpoint_handler=handler,
+                finalize_pipeline=False,
+            )
+        else:
+            task = self._run_demo_development(
+                task,
+                repository,
+                checkpoint_handler=handler,
+            )
+        return {"task": task}
+
+    def _graph_load_review(self, state: TaskDeliveryState) -> dict:
+        task = self._require_task(state["task_id"])
+        if task.status == TaskStatus.REVIEW_REPAIRING:
+            raise ValueError(
+                "Code Review 修复正在执行或曾被中断，请通过任务恢复入口继续"
+            )
+        if task.status not in {TaskStatus.CHANGE_READY, TaskStatus.CHANGES_REQUESTED}:
+            raise ValueError("Task is not ready for code review")
+        repository = self.store.get_repository(task.repository_id or "demo")
+        if repository is None:
+            raise ValueError("Repository not found")
+        return {"task": task, "repository": repository}
+
+    def _graph_generate_mr(self, state: TaskDeliveryState) -> dict:
+        task = state["task"]
+        self._prepare_review_pipeline(task)
+        return {"task": task}
+
+    def _graph_review(self, state: TaskDeliveryState) -> dict:
+        task = self._review_loop(
+            state["task"],
+            state["repository"],
+            checkpoint_handler=state.get("checkpoint_handler"),
+        )
+        return {"task": task}
+
+    def _run_demo_development(
+        self,
+        task: Task,
+        repository_config,
+        *,
+        checkpoint_handler=None,
+    ) -> Task:
         try:
             repository = self.workspace_manager.prepare(task.id)
             task.workspace = str(repository)
             self.store.save_task(task)
-            if handler and handler(
+            if checkpoint_handler and checkpoint_handler(
                 "proposal_ready",
                 "apply_patch",
                 {"mode": "demo", "implementation": "deterministic"},
@@ -412,25 +480,27 @@ class TaskOrchestrator:
                 return task
             changed_files = self.developer.implement(repository)
             self._event(task, "implementation_complete", "代码修改已完成", {"files": changed_files})
-            if handler and handler("patch_applied", "run_tests", {"changed_files": changed_files}):
+            if checkpoint_handler and checkpoint_handler(
+                "patch_applied", "run_tests", {"changed_files": changed_files}
+            ):
                 return task
 
             self._transition(task, TaskStatus.TESTING)
             command, exit_code, output = self.workspace_manager.run_tests(repository)
             diff = self.workspace_manager.diff(repository)
             success = exit_code == 0
-            mr_title = "feat: add priority to tasks"
-            mr_description = self._build_mr_description(task, command, exit_code, output)
             task.result = ExecutionResult(
                 success=success,
                 command=command,
                 exit_code=exit_code,
                 output=output,
                 diff=diff,
-                mr_title=mr_title,
-                mr_description=mr_description,
+                mr_title="feat: add priority to tasks",
+                mr_description=self._build_mr_description(
+                    task, command, exit_code, output
+                ),
             )
-            if handler and handler(
+            if checkpoint_handler and checkpoint_handler(
                 "test_result_saved",
                 "generate_mr" if success else "stop_failed",
                 {"result": task.result.model_dump(mode="json"), "success": success},
@@ -439,20 +509,16 @@ class TaskOrchestrator:
             if success:
                 self._transition(task, TaskStatus.CHANGE_READY)
                 self._event(task, "change_ready", "测试通过，Diff 和 MR 描述已生成")
-                return self._finish_review_pipeline(
-                    task, repository_config, checkpoint_handler=handler
-                )
             else:
                 task.error = "Automated tests failed"
                 self._transition(task, TaskStatus.FAILED)
                 self._event(task, "tests_failed", "自动化测试失败", {"exit_code": exit_code})
-            return task
         except Exception as error:
             task.error = str(error)
             if task.status in {TaskStatus.DEVELOPING, TaskStatus.TESTING}:
                 self._transition(task, TaskStatus.FAILED)
             self._event(task, "execution_failed", "执行过程中发生错误", {"error": str(error)})
-            return task
+        return task
 
     def reject(self, task_id: str, actor: str, comment: str) -> Task:
         task = self._require_task(task_id)
@@ -544,6 +610,7 @@ class TaskOrchestrator:
         resume_payload: dict | None = None,
         offset_attempts: bool = False,
         attempt_event_prefix: str = "开发尝试",
+        finalize_pipeline: bool = True,
     ) -> Task:
         try:
             if not task.workspace and self._replan_if_repository_changed(task, repository_config):
@@ -627,9 +694,11 @@ class TaskOrchestrator:
                 task.result = outcome.result
                 self._transition(task, TaskStatus.CHANGE_READY)
                 self._event(task, "change_ready", "真实仓库隔离开发完成，测试通过")
-                return self._finish_review_pipeline(
-                    task, repository_config, checkpoint_handler=checkpoint_handler
-                )
+                if finalize_pipeline:
+                    return self._finish_review_pipeline(
+                        task, repository_config, checkpoint_handler=checkpoint_handler
+                    )
+                return task
             else:
                 task.error = outcome.error or "Development failed"
                 self._transition(task, TaskStatus.FAILED)
@@ -821,22 +890,7 @@ class TaskOrchestrator:
         return DeveloperRunOutcome(kind="success", attempts=all_attempts, result=latest_result)
 
     def run_review(self, task_id: str) -> Task:
-        task = self._require_task(task_id)
-        if task.status == TaskStatus.REVIEW_REPAIRING:
-            raise ValueError(
-                "Code Review 修复正在执行或曾被中断，请通过任务恢复入口继续"
-            )
-        if task.status not in {
-            TaskStatus.CHANGE_READY,
-            TaskStatus.CHANGES_REQUESTED,
-        }:
-            raise ValueError("Task is not ready for code review")
-        repository = self.store.get_repository(task.repository_id or "demo")
-        if repository is None:
-            raise ValueError("Repository not found")
-        if task.status == TaskStatus.CHANGE_READY:
-            return self._finish_review_pipeline(task, repository)
-        return self._review_loop(task, repository)
+        return self.delivery_graph.review(task_id)
 
     def apply_user_feedback(
         self,
@@ -1256,6 +1310,10 @@ class TaskOrchestrator:
             raise ValueError(str(error)) from error
 
     def _finish_review_pipeline(self, task: Task, repository_config, checkpoint_handler=None) -> Task:
+        self._prepare_review_pipeline(task)
+        return self._review_loop(task, repository_config, checkpoint_handler=checkpoint_handler)
+
+    def _prepare_review_pipeline(self, task: Task) -> Task:
         self._transition(task, TaskStatus.GENERATING_MR)
         task.merge_request = self._write_merge_request(task)
         self._event(
@@ -1264,7 +1322,7 @@ class TaskOrchestrator:
             "已根据最终 Diff、验收标准和测试结果生成 MR 草稿",
             {"changed_files": task.merge_request.changed_files},
         )
-        return self._review_loop(task, repository_config, checkpoint_handler=checkpoint_handler)
+        return task
 
     def _write_merge_request(self, task: Task):
         if task.design_reference and self.ui_acceptance_service:
