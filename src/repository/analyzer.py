@@ -4,8 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from dev_agent.code_intelligence import RepositoryCodeIndex
-from dev_agent.domain.models import CodeEvidence, RepositoryAnalysis, ToolCallAudit
+from code_intelligence import RepositoryCodeIndex
+from domain.models import CodeEvidence, RepositoryAnalysis, ToolCallAudit
 
 
 IGNORED_DIRECTORIES = {

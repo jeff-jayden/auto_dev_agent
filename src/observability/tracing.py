@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from dev_agent.domain.models import AgentTrace, TraceSpan
-from dev_agent.infrastructure.store import SQLiteTaskStore
+from domain.models import AgentTrace, TraceSpan
+from infrastructure.store import SQLiteTaskStore
 
 T = TypeVar("T", bound=BaseModel)
 _trace_id: ContextVar[str | None] = ContextVar("agent_trace_id", default=None)

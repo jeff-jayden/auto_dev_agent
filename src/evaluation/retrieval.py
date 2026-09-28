@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from dev_agent.code_intelligence import RepositoryCodeIndex
-from dev_agent.domain.models import (
+from code_intelligence import RepositoryCodeIndex
+from domain.models import (
     RetrievalCaseResult,
     RetrievalEvaluationComparison,
     RetrievalMetrics,

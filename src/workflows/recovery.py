@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dev_agent.domain.models import RecoveryCheck, RecoveryReport, TaskStatus
+from domain.models import RecoveryCheck, RecoveryReport, TaskStatus
 
 if TYPE_CHECKING:
-    from dev_agent.workflows.orchestrator import TaskOrchestrator
+    from workflows.orchestrator import TaskOrchestrator
 
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "pause_requested"}

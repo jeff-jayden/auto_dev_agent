@@ -9,7 +9,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from dev_agent.domain.models import CodeEvidence, ContextFile, RepositoryContextPack
+from domain.models import CodeEvidence, ContextFile, RepositoryContextPack
 
 
 INDEX_VERSION = 2

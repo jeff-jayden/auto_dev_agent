@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from dev_agent.llm.gateway import OpenAICompatibleGateway, build_model_gateway
+from llm.gateway import OpenAICompatibleGateway, build_model_gateway
 
 
 class ModelGatewayConfigurationTests(unittest.TestCase):

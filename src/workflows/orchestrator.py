@@ -9,13 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from dev_agent.agents import (
+from agents import (
     CodeReviewerAgent,
     GenericDeveloperAgent,
     LocalPlanningAgent,
     MergeRequestWriter,
 )
-from dev_agent.domain.models import (
+from domain.models import (
     Approval,
     DevelopmentProposal,
     ExecutionResult,
@@ -26,11 +26,11 @@ from dev_agent.domain.models import (
     TaskStatus,
     ReplayResult,
 )
-from dev_agent.infrastructure.store import SQLiteTaskStore
-from dev_agent.repository import RepositoryAnalyzer
-from dev_agent.sandbox import WorkspaceManager
-from dev_agent.scm import GitHubDeliveryService
-from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
+from infrastructure.store import SQLiteTaskStore
+from repository import RepositoryAnalyzer
+from sandbox import WorkspaceManager
+from scm import GitHubDeliveryService
+from ui_validation import FigmaMCPClient, UIAcceptanceService
 from .workflow_graph import TaskDeliveryGraph, TaskDeliveryState, WorkflowStateStore
 
 
@@ -690,7 +690,7 @@ class TaskOrchestrator:
         resume_payload: dict | None = None,
         session_id: str,
     ):
-        from dev_agent.agents.generic_developer import DeveloperRunOutcome
+        from agents.generic_developer import DeveloperRunOutcome
 
         steps = task.technical_plan.development_steps
         existing = {item.step_id: item for item in task.step_executions}

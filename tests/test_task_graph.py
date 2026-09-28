@@ -1,7 +1,7 @@
 import unittest
 
-from dev_agent.domain.models import Task, TaskStatus
-from dev_agent.workflows.workflow_graph import TaskDeliveryGraph
+from domain.models import Task, TaskStatus
+from workflows.workflow_graph import TaskDeliveryGraph
 
 
 class FakeDeliveryAdapter:

@@ -3,8 +3,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from dev_agent.infrastructure.store import SQLiteTaskStore
-from dev_agent.repository.catalog import RepositoryCatalog
+from infrastructure.store import SQLiteTaskStore
+from repository.catalog import RepositoryCatalog
 
 
 class RepositoryCatalogBrowseTests(unittest.TestCase):

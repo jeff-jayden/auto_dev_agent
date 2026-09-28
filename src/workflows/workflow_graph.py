@@ -12,7 +12,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from dev_agent.domain.models import Task, TaskCheckpoint, TaskStatus
+from domain.models import Task, TaskCheckpoint, TaskStatus
 
 
 ALLOWED_PHASE_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {

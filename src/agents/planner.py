@@ -9,14 +9,14 @@ from langchain.tools import tool
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from dev_agent.domain.models import (
+from domain.models import (
     DevelopmentStep,
     RepositoryAnalysis,
     RequirementAnalysis,
     TechnicalPlan,
     ToolCallAudit,
 )
-from dev_agent.llm.gateway import DisabledModelGateway, ModelGateway
+from llm.gateway import DisabledModelGateway, ModelGateway
 
 
 class PlanningResponse(BaseModel):

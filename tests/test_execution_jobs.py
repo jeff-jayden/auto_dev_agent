@@ -3,8 +3,8 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from dev_agent.domain.models import ExecutionJob
-from dev_agent.infrastructure.store import SQLiteTaskStore
+from domain.models import ExecutionJob
+from infrastructure.store import SQLiteTaskStore
 
 
 class ExecutionJobStoreTests(unittest.TestCase):

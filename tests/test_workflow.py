@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 
 from tests.support import build_orchestrator
-from dev_agent.agents import DeveloperRunOutcome
-from dev_agent.domain.models import (
+from agents import DeveloperRunOutcome
+from domain.models import (
     DevelopmentAttempt,
     DevelopmentProposal,
     ReviewFinding,

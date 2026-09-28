@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from dev_agent.domain.models import (
+from domain.models import (
     DesignReference,
     Task,
     UIAcceptanceCheck,

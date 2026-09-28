@@ -2,11 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dev_agent.infrastructure.store import SQLiteTaskStore
-from dev_agent.observability import TraceRecorder
-from dev_agent.evaluation import GoldenCaseEvaluator
-from dev_agent.evaluation import RetrievalEvaluator
-from dev_agent.domain.models import TraceSpan
+from infrastructure.store import SQLiteTaskStore
+from observability import TraceRecorder
+from evaluation import GoldenCaseEvaluator
+from evaluation import RetrievalEvaluator
+from domain.models import TraceSpan
 
 
 class ObservabilityTests(unittest.TestCase):

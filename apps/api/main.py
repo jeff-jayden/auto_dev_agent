@@ -15,22 +15,22 @@ SOURCE_ROOT = PROJECT_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from dev_agent.agents import (
+from agents import (
     CodeReviewerAgent,
     GenericDeveloperAgent,
     LocalPlanningAgent,
     MergeRequestWriter,
 )
-from dev_agent.infrastructure.store import SQLiteTaskStore
-from dev_agent.execution import TaskExecutionWorker
-from dev_agent.llm import ModelGateway, build_model_gateway
-from dev_agent.observability import TraceRecorder, TracingModelGateway
-from dev_agent.evaluation import GoldenCaseEvaluator
-from dev_agent.repository import RepositoryAnalyzer, RepositoryCatalog
-from dev_agent.sandbox import WorkspaceManager
-from dev_agent.scm import GitHubClient, GitHubDeliveryService
-from dev_agent.workflows import RecoveryCoordinator, TaskOrchestrator, WorkflowStateStore
-from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
+from infrastructure.store import SQLiteTaskStore
+from execution import TaskExecutionWorker
+from llm import ModelGateway, build_model_gateway
+from observability import TraceRecorder, TracingModelGateway
+from evaluation import GoldenCaseEvaluator
+from repository import RepositoryAnalyzer, RepositoryCatalog
+from sandbox import WorkspaceManager
+from scm import GitHubClient, GitHubDeliveryService
+from workflows import RecoveryCoordinator, TaskOrchestrator, WorkflowStateStore
+from ui_validation import FigmaMCPClient, UIAcceptanceService
 
 
 class CreateTaskRequest(BaseModel):

@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 from apps.api.main import build_orchestrator as build_production_orchestrator
 from tests.support import build_orchestrator
-from dev_agent.agents import GenericDeveloperAgent, LocalPlanningAgent
-from dev_agent.code_intelligence.indexer import RepositoryCodeIndex
-from dev_agent.domain.models import (
+from agents import GenericDeveloperAgent, LocalPlanningAgent
+from code_intelligence.indexer import RepositoryCodeIndex
+from domain.models import (
     DevelopmentProposal,
     PatchChange,
     RepositoryAnalysis,
@@ -20,7 +20,7 @@ from dev_agent.domain.models import (
     TechnicalPlan,
     TextReplacement,
 )
-from dev_agent.repository import RepositoryAnalyzer
+from repository import RepositoryAnalyzer
 
 
 class RepositoryAnalysisTests(unittest.TestCase):

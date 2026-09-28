@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from dev_agent.agents.context_explorer import ContextToolDecision
-from dev_agent.agents.context_explorer import DeveloperContextExplorer
-from dev_agent.agents.context_explorer import DeveloperContextToolRegistry
-from dev_agent.agents.generic_developer import GenericDeveloperAgent
-from dev_agent.domain.models import (
+from agents.context_explorer import ContextToolDecision
+from agents.context_explorer import DeveloperContextExplorer
+from agents.context_explorer import DeveloperContextToolRegistry
+from agents.generic_developer import GenericDeveloperAgent
+from domain.models import (
     RepositoryAnalysis,
     RepositoryContextPack,
     ReplacementDevelopmentProposal,
@@ -179,7 +179,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         )
 
     def test_context_tool_requires_arguments_for_selected_tool(self):
-        from dev_agent.tools import DeveloperToolkit, ToolPolicy
+        from tools import DeveloperToolkit, ToolPolicy
 
         toolkit = DeveloperToolkit(
             self.repository,
@@ -194,7 +194,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         self.assertEqual(decision.tool, "finish")
 
     def test_langchain_registry_exposes_schemas_and_invokes_tools(self):
-        from dev_agent.tools import DeveloperToolkit, ToolPolicy
+        from tools import DeveloperToolkit, ToolPolicy
 
         toolkit = DeveloperToolkit(
             self.repository,
@@ -212,7 +212,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         self.assertIn("HiddenHelper", result["content"])
 
     def test_create_agent_autonomously_calls_tools_and_expands_context(self):
-        from dev_agent.tools import DeveloperToolkit, ToolPolicy
+        from tools import DeveloperToolkit, ToolPolicy
 
         class CreateAgentGateway:
             enabled = True
@@ -265,7 +265,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         )
 
         with patch(
-            "dev_agent.agents.context_explorer.create_agent",
+            "agents.context_explorer.create_agent",
             side_effect=lambda *, model, tools, system_prompt: FakeCompiledAgent(tools),
         ) as create:
             context = DeveloperContextExplorer(CreateAgentGateway(), max_steps=4).explore(

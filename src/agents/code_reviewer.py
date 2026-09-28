@@ -8,8 +8,8 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from dev_agent.domain.models import ReviewFinding, ReviewerModelOutput, ReviewRound, Task
-from dev_agent.llm import ModelGateway
+from domain.models import ReviewFinding, ReviewerModelOutput, ReviewRound, Task
+from llm import ModelGateway
 
 
 class ReviewLoopState(TypedDict, total=False):

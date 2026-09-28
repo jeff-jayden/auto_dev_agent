@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from dev_agent.domain.models import MergeRequestDraft, Task
+from domain.models import MergeRequestDraft, Task
 
 
 class MergeRequestWriter:

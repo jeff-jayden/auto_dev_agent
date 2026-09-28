@@ -7,8 +7,8 @@ import subprocess
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from dev_agent.domain.models import Repository
-from dev_agent.infrastructure.store import SQLiteTaskStore
+from domain.models import Repository
+from infrastructure.store import SQLiteTaskStore
 
 
 class RepositoryCatalog:

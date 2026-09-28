@@ -1,7 +1,7 @@
 import unittest
 
-from dev_agent.domain.models import TaskStatus
-from dev_agent.domain.state_machine import ensure_transition
+from domain.models import TaskStatus
+from domain.state_machine import ensure_transition
 
 
 class StateMachineTests(unittest.TestCase):

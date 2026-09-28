@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from apps.api import main
 from tests.support import build_orchestrator
-from dev_agent.domain.models import ExecutionJob, TaskStatus
+from domain.models import ExecutionJob, TaskStatus
 
 
 class ApiTests(unittest.TestCase):

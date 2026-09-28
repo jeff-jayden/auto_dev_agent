@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from dev_agent.agents.planner import LocalPlanningAgent, PlanningResponse
-from dev_agent.domain.models import (
+from agents.planner import LocalPlanningAgent, PlanningResponse
+from domain.models import (
     CodeEvidence,
     DevelopmentStep,
     RepositoryAnalysis,
@@ -82,7 +82,7 @@ class PlanningCreateAgentTests(unittest.TestCase):
                 return {"messages": [], "structured_response": expected}
 
         with patch(
-            "dev_agent.agents.planner.create_agent",
+            "agents.planner.create_agent",
             side_effect=lambda **kwargs: FakeCompiledAgent(kwargs["tools"]),
         ) as create:
             analysis, plan = LocalPlanningAgent(Gateway()).plan(

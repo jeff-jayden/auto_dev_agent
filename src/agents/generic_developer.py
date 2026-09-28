@@ -10,7 +10,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from dev_agent.domain.models import (
+from domain.models import (
     DevelopmentAttempt,
     DevelopmentProposal,
     ExecutionResult,
@@ -18,8 +18,8 @@ from dev_agent.domain.models import (
     Task,
     ToolCallAudit,
 )
-from dev_agent.llm import ModelGateway
-from dev_agent.tools import DeveloperToolkit, PatchRejected, ToolPolicy
+from llm import ModelGateway
+from tools import DeveloperToolkit, PatchRejected, ToolPolicy
 
 from .context_explorer import DeveloperContextExplorer
 

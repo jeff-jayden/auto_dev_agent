@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from tests.support import build_orchestrator
-from dev_agent.execution import TaskExecutionWorker
-from dev_agent.domain.models import ExecutionJob
-from dev_agent.workflows import RecoveryCoordinator
+from execution import TaskExecutionWorker
+from domain.models import ExecutionJob
+from workflows import RecoveryCoordinator
 
 
 class RecoveryCoordinatorTests(unittest.TestCase):

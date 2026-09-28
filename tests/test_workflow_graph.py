@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dev_agent.domain.models import Task, TaskCheckpoint, TaskStatus
-from dev_agent.workflows.workflow_graph import WorkflowStateStore
+from domain.models import Task, TaskCheckpoint, TaskStatus
+from workflows.workflow_graph import WorkflowStateStore
 
 
 class WorkflowStateStoreTests(unittest.TestCase):

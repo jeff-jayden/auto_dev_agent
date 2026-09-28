@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 
 from apps.api.main import build_orchestrator as build_production_orchestrator
-from dev_agent.agents import DeveloperRunOutcome
-from dev_agent.domain.models import DevelopmentAttempt, ExecutionResult
+from agents import DeveloperRunOutcome
+from domain.models import DevelopmentAttempt, ExecutionResult
 
 
 BASE_SERVICE = '''def create_task(title: str) -> dict[str, object]:

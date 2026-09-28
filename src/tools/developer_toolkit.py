@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from dev_agent.domain.models import DevelopmentProposal, ToolCallAudit
+from domain.models import DevelopmentProposal, ToolCallAudit
 from .policy import ToolPolicy
 
 

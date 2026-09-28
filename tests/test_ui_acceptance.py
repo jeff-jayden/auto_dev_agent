@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import build_orchestrator
-from dev_agent.agents.mr_writer import MergeRequestWriter
-from dev_agent.domain.models import (
+from agents.mr_writer import MergeRequestWriter
+from domain.models import (
     DesignReference,
     ExecutionResult,
     Task,
@@ -13,7 +13,7 @@ from dev_agent.domain.models import (
     UIAcceptanceCheck,
     UIAcceptanceReport,
 )
-from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
+from ui_validation import FigmaMCPClient, UIAcceptanceService
 
 
 class UIAcceptanceTests(unittest.TestCase):

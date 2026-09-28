@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dev_agent.domain.models import DevelopmentProposal, PatchChange, TextReplacement
-from dev_agent.tools import DeveloperToolkit, PatchRejected, ToolPolicy
+from domain.models import DevelopmentProposal, PatchChange, TextReplacement
+from tools import DeveloperToolkit, PatchRejected, ToolPolicy
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -133,7 +133,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertEqual(proposal.replacements[0].path, "App.js")
 
     def test_double_escaped_model_snippet_is_normalized_before_validation(self):
-        from dev_agent.agents.generic_developer import GenericDeveloperAgent
+        from agents.generic_developer import GenericDeveloperAgent
 
         proposal = DevelopmentProposal(
             test_command="npm test",
@@ -150,7 +150,7 @@ class ToolPolicyTests(unittest.TestCase):
         )
 
     def test_compiler_error_targets_the_referencing_file(self):
-        from dev_agent.agents.generic_developer import GenericDeveloperAgent
+        from agents.generic_developer import GenericDeveloperAgent
 
         failure = """[build]\nFailed to compile.\n[eslint]\nsrc\\index.js\n  Line 9:6: 'App' is not defined react/jsx-no-undef\nRejected target files: src/App.js"""
 

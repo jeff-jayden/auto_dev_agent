@@ -3,10 +3,10 @@ from __future__ import annotations
 from time import perf_counter
 from uuid import uuid4
 
-from dev_agent.domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus
-from dev_agent.workflows.workflow_graph import ensure_workflow_transition
-from dev_agent.observability import TraceRecorder
-from dev_agent.repository.catalog import RepositoryCatalog
+from domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus
+from workflows.workflow_graph import ensure_workflow_transition
+from observability import TraceRecorder
+from repository.catalog import RepositoryCatalog
 from .retrieval import RetrievalEvaluator
 
 

@@ -2,9 +2,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from dev_agent.agents.planner import LocalPlanningAgent
-from dev_agent.agents.generic_developer import DeveloperRunOutcome
-from dev_agent.domain.models import (
+from agents.planner import LocalPlanningAgent
+from agents.generic_developer import DeveloperRunOutcome
+from domain.models import (
     DevelopmentAttempt,
     DevelopmentStep,
     ExecutionResult,
@@ -12,7 +12,7 @@ from dev_agent.domain.models import (
     TaskStatus,
     TechnicalPlan,
 )
-from dev_agent.workflows.orchestrator import TaskOrchestrator
+from workflows.orchestrator import TaskOrchestrator
 
 
 class StepwiseDevelopmentTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from collections.abc import Callable, Iterator
 
-from dev_agent.domain.models import (
+from domain.models import (
     AgentTrace,
     EvaluationRun,
     ExecutionJob,

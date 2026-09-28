@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 
 from tests.support import build_orchestrator
-from dev_agent.domain.models import RemotePullRequest, TaskStatus
-from dev_agent.execution import TaskExecutionWorker
-from dev_agent.repository.catalog import RepositoryCatalog
-from dev_agent.scm import GitHubClient, GitHubDeliveryService
+from domain.models import RemotePullRequest, TaskStatus
+from execution import TaskExecutionWorker
+from repository.catalog import RepositoryCatalog
+from scm import GitHubClient, GitHubDeliveryService
 
 
 class FakeGitHubTransport:

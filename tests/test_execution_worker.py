@@ -5,8 +5,8 @@ from pathlib import Path
 from threading import Event
 
 from tests.support import build_orchestrator
-from dev_agent.execution import TaskExecutionWorker
-from dev_agent.domain.models import TaskStatus
+from execution import TaskExecutionWorker
+from domain.models import TaskStatus
 
 
 class ExecutionWorkerCheckpointTests(unittest.TestCase):
@@ -60,7 +60,7 @@ class ExecutionWorkerCheckpointTests(unittest.TestCase):
             orchestrator = build_orchestrator(Path(directory) / "runtime")
             task = orchestrator.create_task("远端状态刷新", "继续修改前检查 PR 状态。")
             task.status = TaskStatus.WAITING_MERGE_APPROVAL
-            from dev_agent.domain.models import RemotePullRequest
+            from domain.models import RemotePullRequest
             task.remote_pull_request = RemotePullRequest(
                 repository="example/project",
                 number=7,

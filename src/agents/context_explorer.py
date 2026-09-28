@@ -10,7 +10,7 @@ from langchain.tools import tool
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
-from dev_agent.domain.models import ToolCallAudit
+from domain.models import ToolCallAudit
 
 
 class ContextToolDecision(BaseModel):

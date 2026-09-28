@@ -6,8 +6,8 @@ from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from dev_agent.domain.models import ExecutionJob, TaskEvent, TaskStatus
-from dev_agent.workflows import RecoveryCoordinator, TaskOrchestrator
+from domain.models import ExecutionJob, TaskEvent, TaskStatus
+from workflows import RecoveryCoordinator, TaskOrchestrator
 
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "paused", "abandoned"}

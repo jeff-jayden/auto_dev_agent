@@ -6,7 +6,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dev_agent.domain.models import RemotePullRequest, Repository, Task
+from domain.models import RemotePullRequest, Repository, Task
 
 from .github import GitHubClient
 
