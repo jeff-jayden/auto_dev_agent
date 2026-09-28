@@ -7,7 +7,7 @@
 3. 生成带文件和行号证据的需求分析与技术方案
 4. 对方案执行批准、拒绝或要求修改
 5. 真实仓库审批后保持只读并进入 `plan_approved`
-6. 内置 Demo 审批后在隔离目录修改代码、执行测试并生成 Diff/MR 描述
+6. 审批后从真实 Git 仓库基线创建隔离 Worktree，修改代码、执行测试并生成 Diff/MR 描述
 7. 真实仓库审批后从规划基线创建 Git Worktree，不修改原始工作目录
 8. Developer Agent 只能修改技术方案内文件，现有文件优先使用精确搜索/替换，由系统生成 Git Diff；新文件兼容 unified diff
 9. 只执行仓库分析阶段批准的测试命令，失败后最多自动修复三次
@@ -60,7 +60,7 @@
 
 对于 React/CRA 项目，分析器会优先选择 `App`、对应测试和样式文件，使用非交互测试参数，并在隔离 Worktree 中复用原仓库已有的 `node_modules`，避免测试进入 watch 模式或因依赖目录未复制而失败。
 
-默认使用确定性的本地规划器，因此没有模型 Key 也能完成仓库分析和内置 Demo。真实仓库开发必须配置 Ollama 或 OpenAI-compatible 模型；没有模型时任务会明确失败，不会伪造代码结果。模型输出如果无效、引用方案外文件或请求未批准命令，也会被执行层拒绝。
+没有模型 Key 时仍可完成真实仓库分析和确定性方案兜底，但代码开发必须配置 OpenAI-compatible 模型；没有模型时任务会明确失败，不会伪造代码结果。模型输出如果无效、引用方案外文件或请求未批准命令，也会被执行层拒绝。系统不再自动注册示例仓库，新环境需要先添加 GitHub 或本地 Git 仓库。
 
 Developer 的只读上下文工具循环默认对内置模型网关启用，可通过 `DEVELOPER_CONTEXT_TOOLS_ENABLED=false` 关闭，或使用 `DEVELOPER_CONTEXT_MAX_STEPS=1..8` 调整最大探索步数。工具使用 LangChain `StructuredTool` 与 Pydantic 输入 Schema 统一注册和调用；LangGraph 负责编排、状态、检查点和人工中断，项目自己的 ToolPolicy 与服务层继续控制 Git 写入、测试命令和 GitHub 发布边界。
 
@@ -218,4 +218,4 @@ MR 与审查接口：
 - `GET /api/repositories/{id}/analysis`：执行只读仓库分析
 - `GET /health`：健康检查
 
-生成的工作区位于 `runtime/tasks/{task_id}/repo`，不会修改 `examples/demo_repository` 模板。
+生成的工作区位于 `runtime/tasks/{task_id}/repo`，通过 Git Worktree 与原始仓库隔离，不会直接修改注册仓库的工作目录。
