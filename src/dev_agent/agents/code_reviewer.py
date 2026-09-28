@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from dev_agent.domain.models import ReviewFinding, ReviewerModelOutput, ReviewRound, Task
 from dev_agent.llm import ModelGateway
+
+
+class ReviewLoopState(TypedDict, total=False):
+    route: str
+    review: object
+    feedback: str
 
 
 class CodeReviewerAgent:
@@ -54,6 +64,30 @@ class CodeReviewerAgent:
             findings=normalized,
             deterministic_checks=checks,
         )
+
+    def run_loop(
+        self,
+        task: Task,
+        review_node: Callable[[ReviewLoopState], dict],
+        repair_node: Callable[[ReviewLoopState], dict],
+    ) -> Task:
+        """Run the bounded review/repair subgraph for this reviewer."""
+        graph = StateGraph(ReviewLoopState)
+        graph.add_node("review", review_node)
+        graph.add_node("repair", repair_node)
+        graph.add_edge(START, "review")
+        graph.add_conditional_edges(
+            "review",
+            lambda state: state["route"],
+            {"repair": "repair", "done": END},
+        )
+        graph.add_conditional_edges(
+            "repair",
+            lambda state: state["route"],
+            {"review": "review", "done": END},
+        )
+        graph.compile(name="code-review-repair-loop").invoke({})
+        return task
 
     def _deterministic_findings(
         self, task: Task, changed_lines: dict[str, list[tuple[int, str]]]

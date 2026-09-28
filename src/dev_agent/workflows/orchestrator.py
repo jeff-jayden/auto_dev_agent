@@ -7,10 +7,7 @@ import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
 from uuid import uuid4
-
-from langgraph.graph import END, START, StateGraph
 
 from dev_agent.agents import (
     CodeReviewerAgent,
@@ -36,12 +33,6 @@ from dev_agent.sandbox import WorkspaceManager
 from dev_agent.scm import GitHubDeliveryService
 from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
 from .workflow_graph import TaskDeliveryGraph, TaskDeliveryState, WorkflowStateStore
-
-
-class ReviewLoopState(TypedDict, total=False):
-    route: str
-    review: object
-    feedback: str
 
 
 class TaskOrchestrator:
@@ -1366,7 +1357,7 @@ class TaskOrchestrator:
     def _review_loop(self, task: Task, repository_config, checkpoint_handler=None) -> Task:
         cycle_start = int(task.metadata.get("review_cycle_start", 0))
 
-        def review_node(_state: ReviewLoopState) -> dict:
+        def review_node(_state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEWING)
             review = self.code_reviewer.review(task, len(task.reviews) + 1)
             task.reviews.append(review)
@@ -1407,7 +1398,7 @@ class TaskOrchestrator:
                 "feedback": self._review_feedback(review),
             }
 
-        def repair_node(state: ReviewLoopState) -> dict:
+        def repair_node(state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEW_REPAIRING)
             feedback = state["feedback"]
             outcome = self.generic_developer.run(
@@ -1444,22 +1435,7 @@ class TaskOrchestrator:
             self._event(task, "merge_request_regenerated", "CR 修复测试通过，已重新生成 MR 草稿")
             return {"route": "review"}
 
-        graph = StateGraph(ReviewLoopState)
-        graph.add_node("review", review_node)
-        graph.add_node("repair", repair_node)
-        graph.add_edge(START, "review")
-        graph.add_conditional_edges(
-            "review",
-            lambda state: state["route"],
-            {"repair": "repair", "done": END},
-        )
-        graph.add_conditional_edges(
-            "repair",
-            lambda state: state["route"],
-            {"review": "review", "done": END},
-        )
-        graph.compile(name="code-review-repair-loop").invoke({})
-        return task
+        return self.code_reviewer.run_loop(task, review_node, repair_node)
 
     def _append_attempts(self, task: Task, attempts, label: str = "CR 修复尝试") -> None:
         offset = len(task.development_attempts)
