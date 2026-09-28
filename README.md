@@ -56,6 +56,7 @@
 52. 需求、风险、发布和合入审批使用持久化 interrupt，用户操作通过 resume 恢复；Worker 只按 Graph 检查点恢复任务
 53. 仓库上下文使用关键词/符号匹配与轻量语义向量的加权 RRF 融合，依赖图继续补齐调用方、被调用方和测试
 54. Golden Evaluation 同时运行固定代码检索集，对比旧关键词基线与混合 RAG 的 Recall@K、MRR、Hit@K、无关文件率和上下文规模
+55. 顶层 `TaskDeliveryGraph` 编排任务创建、仓库分析、Plan Agent、人工方案审批、Developer Agent、MR 生成与 Reviewer Agent；Orchestrator 只保留命令入口和节点依赖适配
 
 对于 React/CRA 项目，分析器会优先选择 `App`、对应测试和样式文件，使用非交互测试参数，并在隔离 Worktree 中复用原仓库已有的 `node_modules`，避免测试进入 watch 模式或因依赖目录未复制而失败。
 
@@ -70,6 +71,28 @@ Developer 的只读上下文工具循环默认对内置模型网关启用，可�
 - `ExecutionJob`：Worker 的队列、租约、心跳和重试记录，描述“谁在执行”，不描述业务流程走到哪里。
 - `task_checkpoints`：继续为历史列表和 Dry Run 提供只读投影；恢复执行只读取 LangGraph 中的最新检查点。
 - Developer 与 Code Review：分别作为条件子图运行；模型负责提出方案或审查意见，图控制循环、上限和人工 Gate。
+
+### 顶层交付图
+
+```mermaid
+flowchart LR
+    API[API / Worker 命令] --> O[TaskOrchestrator 薄入口]
+    O --> G[TaskDeliveryGraph]
+    G --> C[创建任务]
+    C --> A[仓库分析]
+    A --> P[Plan Agent]
+    P --> H{人工审批}
+    H -->|批准| D[Developer Agent 子图]
+    H -->|拒绝| X[结束]
+    D -->|测试通过| M[生成 MR 草稿]
+    D -->|高风险| R{风险审批}
+    D -->|失败/暂停| S[检查点 / 恢复入口]
+    M --> V[Reviewer Agent 子图]
+    V -->|通过| U[等待发布审批]
+    V -->|需修改| D
+```
+
+`TaskDeliveryGraph` 决定主链路中的下一个节点，Developer 和 Reviewer 子图决定各自内部的工具循环与修复循环。`TaskOrchestrator` 不再手写正常交付顺序，只负责把 API 参数变成图输入，并向节点注入数据库、Git、模型、工作区和 GitHub 等基础设施能力。风险、暂停恢复、发布与合入仍是显式人工命令入口，并通过 `WorkflowStateStore` 的 interrupt/checkpoint 与同一任务状态关联。
 
 ## 混合 RAG 与评测
 
