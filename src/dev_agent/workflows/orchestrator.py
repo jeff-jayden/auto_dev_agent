@@ -93,7 +93,7 @@ class TaskOrchestrator:
             with self.tracer.trace(
                 "task.create", kind="planning", metadata={"repository_id": repository_id}
             ) as trace:
-                task = self._create_task(
+                task = self.delivery_graph.create(
                     title, requirement, repository_id,
                     figma_url=figma_url, preview_url=preview_url,
                     viewport_width=viewport_width, viewport_height=viewport_height,
@@ -101,7 +101,7 @@ class TaskOrchestrator:
                 trace.task_id = task.id
                 self.store.save_trace(trace)
                 return task
-        return self._create_task(
+        return self.delivery_graph.create(
             title, requirement, repository_id,
             figma_url=figma_url, preview_url=preview_url,
             viewport_width=viewport_width, viewport_height=viewport_height,
@@ -278,36 +278,28 @@ class TaskOrchestrator:
                 matches.append(relative)
         return matches[:8]
 
-    def _create_task(
-        self,
-        title: str,
-        requirement: str,
-        repository_id: str = "demo",
-        *,
-        figma_url: str = "",
-        preview_url: str = "",
-        viewport_width: int = 1440,
-        viewport_height: int = 900,
-    ) -> Task:
+    def _graph_create_task(self, state: TaskDeliveryState) -> dict:
+        repository_id = state["repository_id"]
         repository = self.store.get_repository(repository_id)
         if repository is None:
             raise ValueError("Repository not found")
         task_id = uuid4().hex[:12]
         design_reference = None
+        figma_url = state.get("figma_url", "")
         if figma_url.strip():
             if self.figma_client is None:
                 raise ValueError("Figma MCP 尚未配置，请设置 FIGMA_MCP_URL")
             design_reference = self.figma_client.capture(
                 task_id,
                 figma_url.strip(),
-                preview_url.strip() or None,
-                viewport_width,
-                viewport_height,
+                state.get("preview_url", "").strip() or None,
+                state.get("viewport_width", 1440),
+                state.get("viewport_height", 900),
             )
         task = Task(
             id=task_id,
-            title=title.strip(),
-            requirement=requirement.strip(),
+            title=state["title"].strip(),
+            requirement=state["requirement"].strip(),
             repository_id=repository_id,
             status=TaskStatus.REQUIREMENT_ANALYSIS,
             design_reference=design_reference,
@@ -321,7 +313,11 @@ class TaskOrchestrator:
                 f"已保存 Figma 节点 {design_reference.node_id} 的设计基线",
                 {"snapshot_hash": design_reference.snapshot_hash},
             )
+        return {"task": task, "repository": repository}
 
+    def _graph_analyze_repository(self, state: TaskDeliveryState) -> dict:
+        task = state["task"]
+        repository = state["repository"]
         span = self.tracer.span("repository.analyze", kind="tool") if self.tracer else None
         if span:
             with span:
@@ -334,6 +330,10 @@ class TaskOrchestrator:
             f"已完成仓库分析：{task.repository_analysis.language}，{task.repository_analysis.file_count} 个文件",
             {"tool_calls": [item.model_dump(mode="json") for item in task.repository_analysis.tool_calls]},
         )
+        return {"task": task}
+
+    def _graph_plan(self, state: TaskDeliveryState) -> dict:
+        task = state["task"]
         span = self.tracer.span("agent.plan", kind="agent") if self.tracer else None
         if span:
             with span:
@@ -354,7 +354,7 @@ class TaskOrchestrator:
         task.metadata["plan_hash"] = self._technical_plan_hash(task)
         self._transition(task, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
         self._event(task, "plan_ready", "需求分析和技术方案已生成，等待人工审批")
-        return task
+        return {"task": task}
 
     def approve(
         self,

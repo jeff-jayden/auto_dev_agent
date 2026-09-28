@@ -16,6 +16,22 @@ class FakeDeliveryAdapter:
         )
         self.repository = object()
 
+    def _graph_create_task(self, state):
+        self.calls.append("create_task")
+        self.task.title = state["title"]
+        self.task.requirement = state["requirement"]
+        self.task.status = TaskStatus.REQUIREMENT_ANALYSIS
+        return {"task": self.task, "repository": self.repository}
+
+    def _graph_analyze_repository(self, state):
+        self.calls.append("analyze_repository")
+        return {"task": self.task}
+
+    def _graph_plan(self, state):
+        self.calls.append("plan")
+        self.task.status = TaskStatus.WAITING_REQUIREMENT_APPROVAL
+        return {"task": self.task}
+
     def _graph_approve_plan(self, state):
         self.calls.append("approve_plan")
         self.task.status = TaskStatus.DEVELOPING
@@ -42,6 +58,18 @@ class FakeDeliveryAdapter:
 
 
 class TaskDeliveryGraphTests(unittest.TestCase):
+    def test_creation_routes_through_repository_analysis_and_planner(self):
+        adapter = FakeDeliveryAdapter()
+
+        task = TaskDeliveryGraph(adapter).create(
+            title="Create with graph",
+            requirement="Analyze the repository and make a plan",
+            repository_id="demo",
+        )
+
+        self.assertEqual(adapter.calls, ["create_task", "analyze_repository", "plan"])
+        self.assertEqual(task.status, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
+
     def test_approval_routes_through_developer_mr_and_reviewer(self):
         adapter = FakeDeliveryAdapter()
 

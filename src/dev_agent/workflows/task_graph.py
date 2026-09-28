@@ -11,6 +11,13 @@ from dev_agent.domain.models import Task, TaskStatus
 class TaskDeliveryState(TypedDict, total=False):
     action: str
     task_id: str
+    title: str
+    requirement: str
+    repository_id: str
+    figma_url: str
+    preview_url: str
+    viewport_width: int
+    viewport_height: int
     actor: str
     comment: str
     checkpoint_job_id: str | None
@@ -33,6 +40,9 @@ class TaskDeliveryGraph:
         self.adapter = adapter
         builder = StateGraph(TaskDeliveryState)
         builder.add_node("dispatch", lambda state: state)
+        builder.add_node("create_task", self.adapter._graph_create_task)
+        builder.add_node("analyze_repository", self.adapter._graph_analyze_repository)
+        builder.add_node("plan", self.adapter._graph_plan)
         builder.add_node("approve_plan", self.adapter._graph_approve_plan)
         builder.add_node("load_review", self.adapter._graph_load_review)
         builder.add_node("develop", self.adapter._graph_develop)
@@ -42,8 +52,15 @@ class TaskDeliveryGraph:
         builder.add_conditional_edges(
             "dispatch",
             lambda state: state["action"],
-            {"approve": "approve_plan", "review": "load_review"},
+            {
+                "create": "create_task",
+                "approve": "approve_plan",
+                "review": "load_review",
+            },
         )
+        builder.add_edge("create_task", "analyze_repository")
+        builder.add_edge("analyze_repository", "plan")
+        builder.add_edge("plan", END)
         builder.add_conditional_edges(
             "approve_plan",
             self._route_after_approval,
@@ -62,6 +79,29 @@ class TaskDeliveryGraph:
         builder.add_edge("generate_mr", "review")
         builder.add_edge("review", END)
         self.graph = builder.compile(name="task-delivery-workflow")
+
+    def create(
+        self,
+        title: str,
+        requirement: str,
+        repository_id: str,
+        *,
+        figma_url: str = "",
+        preview_url: str = "",
+        viewport_width: int = 1440,
+        viewport_height: int = 900,
+    ) -> Task:
+        result = self.graph.invoke({
+            "action": "create",
+            "title": title,
+            "requirement": requirement,
+            "repository_id": repository_id,
+            "figma_url": figma_url,
+            "preview_url": preview_url,
+            "viewport_width": viewport_width,
+            "viewport_height": viewport_height,
+        })
+        return result["task"]
 
     def approve(
         self,
