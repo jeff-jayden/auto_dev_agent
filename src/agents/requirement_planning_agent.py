@@ -19,12 +19,12 @@ from domain.models import (
 from llm.gateway import DisabledModelGateway, ModelGateway
 
 
-class PlanningResponse(BaseModel):
+class RequirementPlanningResponse(BaseModel):
     analysis: RequirementAnalysis
     plan: TechnicalPlan
 
 
-class LocalPlanningAgent:
+class RequirementPlanningAgent:
     """Planning agent with a deterministic fallback when no model is configured."""
 
     def __init__(self, model_gateway: ModelGateway | None = None, tracer=None):
@@ -42,7 +42,7 @@ class LocalPlanningAgent:
             response = self._request_model_plan(
                 title, requirement, repository, design_context,
             )
-            if isinstance(response, PlanningResponse):
+            if isinstance(response, RequirementPlanningResponse):
                 context_paths = {
                     item.path for item in repository.context_pack.files
                 } if repository.context_pack else set()
@@ -67,7 +67,7 @@ class LocalPlanningAgent:
         requirement: str,
         repository: RepositoryAnalysis,
         design_context: str,
-    ) -> PlanningResponse | None:
+    ) -> RequirementPlanningResponse | None:
         system_prompt = (
             "你是资深软件架构师组成的 Plan Agent。只能根据已验证的仓库事实生成需求分析和技术方案，"
             "不得虚构文件。你可以自主决定是否调用只读规划工具补充仓库概览、候选文件和代码证据。"
@@ -94,14 +94,14 @@ class LocalPlanningAgent:
             "figma_design_context": design_context[:30000],
         }
         if callable(getattr(self.model_gateway, "build_langchain_model", None)):
-            registry = PlanningToolRegistry(repository)
+            registry = RequirementPlanningToolRegistry(repository)
             try:
                 model = self.model_gateway.build_langchain_model()
                 agent = create_agent(
                     model=model,
                     tools=registry.tools,
                     system_prompt=system_prompt,
-                    response_format=ToolStrategy(PlanningResponse, handle_errors=True),
+                    response_format=ToolStrategy(RequirementPlanningResponse, handle_errors=True),
                 )
                 scope = self.tracer.span(
                     "agent.langchain_plan_agent",
@@ -125,23 +125,23 @@ class LocalPlanningAgent:
                     if span is not None:
                         span.attributes["tool_calls"] = len(registry.calls)
                         span.output_summary = (
-                            f"PlanningResponse，影响 {len(response.plan.affected_files)} 个文件"
-                            if isinstance(response, PlanningResponse)
-                            else "未返回有效 PlanningResponse"
+                            f"RequirementPlanningResponse，影响 {len(response.plan.affected_files)} 个文件"
+                            if isinstance(response, RequirementPlanningResponse)
+                            else "未返回有效 RequirementPlanningResponse"
                         )
                 repository.tool_calls.append(ToolCallAudit(
-                    tool="planner.create_agent",
+                    tool="requirement_planning.create_agent",
                     arguments={
                         "framework": "langchain.create_agent",
                         "tool_calls": len(registry.calls),
                     },
                     summary="Plan Agent 已完成需求分析和技术方案生成",
-                    success=isinstance(response, PlanningResponse),
+                    success=isinstance(response, RequirementPlanningResponse),
                 ))
-                return response if isinstance(response, PlanningResponse) else None
+                return response if isinstance(response, RequirementPlanningResponse) else None
             except Exception as error:
                 repository.tool_calls.append(ToolCallAudit(
-                    tool="planner.langchain_fallback",
+                    tool="requirement_planning.langchain_fallback",
                     arguments={"framework": "langchain.create_agent"},
                     summary=f"create_agent 不可用，切回兼容规划调用：{str(error)[:500]}",
                     success=False,
@@ -152,9 +152,9 @@ class LocalPlanningAgent:
             json.dumps({
                 **payload,
                 "repository": repository.model_dump(mode="json"),
-                "output_schema": PlanningResponse.model_json_schema(),
+                "output_schema": RequirementPlanningResponse.model_json_schema(),
             }, ensure_ascii=False),
-            PlanningResponse,
+            RequirementPlanningResponse,
         )
 
     def analyze(self, title: str, requirement: str) -> RequirementAnalysis:
@@ -305,7 +305,7 @@ class LocalPlanningAgent:
         remaining = [path for path in approved if path not in assigned]
         if remaining:
             groups: list[tuple[str, list[str]]] = []
-            tests = [path for path in remaining if LocalPlanningAgent._is_test_file(path)]
+            tests = [path for path in remaining if RequirementPlanningAgent._is_test_file(path)]
             styles = [path for path in remaining if Path(path).suffix.lower() in {".css", ".scss", ".sass", ".less"}]
             sources = [path for path in remaining if path not in set(tests + styles)]
             if sources:
@@ -399,7 +399,7 @@ class EvidenceInput(PlanningReasonInput):
     path: str = Field(default="", max_length=500, description="可选的仓库相对路径；为空时返回全部证据")
 
 
-class PlanningToolRegistry:
+class RequirementPlanningToolRegistry:
     """Read-only LangChain tools over the verified repository analysis."""
 
     def __init__(self, repository: RepositoryAnalysis):
@@ -470,7 +470,7 @@ class PlanningToolRegistry:
             "result": result,
         })
         self.repository.tool_calls.append(ToolCallAudit(
-            tool=f"planner.{name}",
+            tool=f"requirement_planning.{name}",
             arguments={"framework": "langchain.create_agent", **arguments},
             summary=reason or f"Plan Agent 自主调用 {name}",
         ))

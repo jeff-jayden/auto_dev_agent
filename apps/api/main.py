@@ -16,10 +16,10 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from agents import (
-    CodeReviewerAgent,
-    GenericDeveloperAgent,
-    LocalPlanningAgent,
-    MergeRequestWriter,
+    CodeReviewAgent,
+    CodeDevelopmentAgent,
+    RequirementPlanningAgent,
+    MergeRequestBuilder,
 )
 from infrastructure.store import SQLiteTaskStore
 from execution import TaskExecutionWorker
@@ -93,12 +93,12 @@ def build_orchestrator(
     )
     result = TaskOrchestrator(
         store,
-        LocalPlanningAgent(gateway, tracer=tracer),
+        RequirementPlanningAgent(gateway, tracer=tracer),
         workspace_manager,
         RepositoryAnalyzer(runtime / "indexes"),
-        GenericDeveloperAgent(gateway, tracer=tracer),
-        MergeRequestWriter(),
-        CodeReviewerAgent(gateway),
+        CodeDevelopmentAgent(gateway, tracer=tracer),
+        MergeRequestBuilder(),
+        CodeReviewAgent(gateway),
         GitHubDeliveryService(
             GitHubClient(
                 os.getenv("GITHUB_TOKEN", ""),
@@ -133,7 +133,7 @@ def health():
     return {
         "status": "ok",
         "phase": 7,
-        "model_enabled": orchestrator.planner.model_gateway.enabled,
+        "model_enabled": orchestrator.requirement_planning_agent.model_gateway.enabled,
         "github_enabled": bool(orchestrator.github_delivery and orchestrator.github_delivery.client.enabled),
         "figma_mcp_enabled": bool(orchestrator.figma_client and orchestrator.figma_client.enabled),
     }

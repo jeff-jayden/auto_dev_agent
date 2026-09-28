@@ -95,7 +95,7 @@ class ExecutionWorkerCheckpointTests(unittest.TestCase):
     def test_running_job_pauses_at_patch_checkpoint_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:
             orchestrator = build_orchestrator(Path(directory) / "runtime")
-            original_developer = orchestrator.generic_developer
+            original_developer = orchestrator.code_development_agent
             implementation_started = Event()
             allow_implementation_to_finish = Event()
 
@@ -113,7 +113,7 @@ class ExecutionWorkerCheckpointTests(unittest.TestCase):
                         )
                     return original_developer.run(*args, **kwargs)
 
-            orchestrator.generic_developer = BlockingDeveloper()
+            orchestrator.code_development_agent = BlockingDeveloper()
             task = orchestrator.create_task(
                 "暂停恢复回归",
                 "任务支持 low、medium、high，默认使用 medium，非法值必须拒绝。",

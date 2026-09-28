@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import build_orchestrator
-from agents.mr_writer import MergeRequestWriter
+from agents.merge_request_builder import MergeRequestBuilder
 from domain.models import (
     DesignReference,
     ExecutionResult,
@@ -145,7 +145,7 @@ class UIAcceptanceTests(unittest.TestCase):
             ),
         )
 
-        draft = MergeRequestWriter().write(task)
+        draft = MergeRequestBuilder().write(task)
 
         self.assertIn("## UI 验收", draft.description)
         self.assertIn("82.5%", draft.description)

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from agents.planner import LocalPlanningAgent, PlanningResponse
+from agents.requirement_planning_agent import RequirementPlanningAgent, RequirementPlanningResponse
 from domain.models import (
     CodeEvidence,
     DevelopmentStep,
@@ -41,7 +41,7 @@ class PlanningCreateAgentTests(unittest.TestCase):
                 test_files=["src/App.test.js"],
             ),
         )
-        expected = PlanningResponse(
+        expected = RequirementPlanningResponse(
             analysis=RequirementAnalysis(
                 summary="新增入口按钮",
                 user_story="用户可以点击入口按钮",
@@ -82,10 +82,10 @@ class PlanningCreateAgentTests(unittest.TestCase):
                 return {"messages": [], "structured_response": expected}
 
         with patch(
-            "agents.planner.create_agent",
+            "agents.requirement_planning_agent.create_agent",
             side_effect=lambda **kwargs: FakeCompiledAgent(kwargs["tools"]),
         ) as create:
-            analysis, plan = LocalPlanningAgent(Gateway()).plan(
+            analysis, plan = RequirementPlanningAgent(Gateway()).plan(
                 "新增入口按钮", "在首页增加按钮，点击后展示内容", repository,
             )
 
@@ -96,9 +96,9 @@ class PlanningCreateAgentTests(unittest.TestCase):
             ["src/App.js", "src/App.test.js", "src/index.js"],
         )
         planner_calls = [item.tool for item in repository.tool_calls]
-        self.assertIn("planner.list_planning_files", planner_calls)
-        self.assertIn("planner.get_code_evidence", planner_calls)
-        self.assertIn("planner.create_agent", planner_calls)
+        self.assertIn("requirement_planning.list_planning_files", planner_calls)
+        self.assertIn("requirement_planning.get_code_evidence", planner_calls)
+        self.assertIn("requirement_planning.create_agent", planner_calls)
 
 
 if __name__ == "__main__":

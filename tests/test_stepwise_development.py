@@ -2,8 +2,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from agents.planner import LocalPlanningAgent
-from agents.generic_developer import DeveloperRunOutcome
+from agents.requirement_planning_agent import RequirementPlanningAgent
+from agents.code_development_agent import DevelopmentRunOutcome
 from domain.models import (
     DevelopmentAttempt,
     DevelopmentStep,
@@ -31,7 +31,7 @@ class StepwiseDevelopmentTests(unittest.TestCase):
             )],
         )
 
-        steps = LocalPlanningAgent.ensure_development_steps(plan, None)
+        steps = RequirementPlanningAgent.ensure_development_steps(plan, None)
 
         self.assertEqual([step.id for step in steps], ["step-1", "step-2", "step-3"])
         self.assertEqual(steps[0].allowed_files, ["src/App.js"])
@@ -101,7 +101,7 @@ class StepwiseDevelopmentTests(unittest.TestCase):
                     success=True, command=["test"], exit_code=0, output="ok", diff="diff",
                     mr_title="title", mr_description="description",
                 )
-                return DeveloperRunOutcome(
+                return DevelopmentRunOutcome(
                     kind="success",
                     attempts=[DevelopmentAttempt(
                         attempt=1, summary=step["objective"], changed_files=step["allowed_files"],
@@ -112,7 +112,7 @@ class StepwiseDevelopmentTests(unittest.TestCase):
 
         orchestrator = TaskOrchestrator.__new__(TaskOrchestrator)
         orchestrator.store = Store()
-        orchestrator.generic_developer = Developer()
+        orchestrator.code_development_agent = Developer()
         orchestrator.tracer = None
         outcome = orchestrator._run_development_steps(
             task, Path("."), SimpleNamespace(local_path="."),
@@ -122,9 +122,9 @@ class StepwiseDevelopmentTests(unittest.TestCase):
         self.assertEqual([attempt.attempt for attempt in outcome.attempts], [1, 2, 3])
         self.assertEqual([attempt.step_attempt for attempt in outcome.attempts], [1, 1, 1])
         self.assertEqual([attempt.step_id for attempt in outcome.attempts], ["step-1", "step-2", "step-3"])
-        self.assertEqual(len(set(orchestrator.generic_developer.context_ids)), 1)
-        self.assertEqual(orchestrator.generic_developer.context_snapshots[1], {"file-1.txt"})
-        self.assertEqual(orchestrator.generic_developer.context_snapshots[2], {"file-1.txt", "file-2.txt"})
+        self.assertEqual(len(set(orchestrator.code_development_agent.context_ids)), 1)
+        self.assertEqual(orchestrator.code_development_agent.context_snapshots[1], {"file-1.txt"})
+        self.assertEqual(orchestrator.code_development_agent.context_snapshots[2], {"file-1.txt", "file-2.txt"})
         self.assertTrue(task.metadata["developer_session_id"])
         self.assertEqual(task.metadata["developer_session_files"], ["file-1.txt", "file-2.txt", "file-3.txt"])
 

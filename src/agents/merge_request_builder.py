@@ -5,7 +5,7 @@ import re
 from domain.models import MergeRequestDraft, Task
 
 
-class MergeRequestWriter:
+class MergeRequestBuilder:
     """Build an evidence-backed local MR draft from verified task artifacts."""
 
     def write(self, task: Task) -> MergeRequestDraft:

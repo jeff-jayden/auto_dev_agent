@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from apps.api.main import build_orchestrator as build_production_orchestrator
 from tests.support import build_orchestrator
-from agents import GenericDeveloperAgent, LocalPlanningAgent
+from agents import CodeDevelopmentAgent, RequirementPlanningAgent
 from code_intelligence.indexer import RepositoryCodeIndex
 from domain.models import (
     DevelopmentProposal,
@@ -90,7 +90,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
             ),
         )
 
-        outcome = GenericDeveloperAgent(RemovalGateway()).run(task, self.repository)
+        outcome = CodeDevelopmentAgent(RemovalGateway()).run(task, self.repository)
 
         self.assertEqual(outcome.kind, "success")
         self.assertNotIn(
@@ -269,7 +269,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
             (react_repository / "src" / name).write_text(content, encoding="utf-8")
 
         analysis = RepositoryAnalyzer().analyze(react_repository, "首页增加按钮，点击弹出你好呀")
-        plan = LocalPlanningAgent().design(analysis, "首页增加按钮，点击弹出你好呀")
+        plan = RequirementPlanningAgent().design(analysis, "首页增加按钮，点击弹出你好呀")
 
         self.assertEqual(analysis.framework, "react")
         self.assertEqual(analysis.test_command, "npm test -- --watchAll=false")
@@ -298,7 +298,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
         analysis = RepositoryAnalyzer().analyze(
             react_repository, "恢复 App 的导入和调用方式"
         )
-        plan = LocalPlanningAgent().design(analysis, "恢复 App 的导入和调用方式")
+        plan = RequirementPlanningAgent().design(analysis, "恢复 App 的导入和调用方式")
 
         self.assertIn("src/App.js", plan.affected_files)
         self.assertIn("src/index.js", plan.affected_files)
@@ -524,7 +524,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
         )
         gateway = ProgressiveGateway()
 
-        outcome = GenericDeveloperAgent(gateway).run(task, repository)
+        outcome = CodeDevelopmentAgent(gateway).run(task, repository)
 
         self.assertEqual(outcome.kind, "success")
         self.assertEqual(gateway.calls, 2)
@@ -579,7 +579,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
             ),
         )
 
-        outcome = GenericDeveloperAgent(IndexGateway()).run(
+        outcome = CodeDevelopmentAgent(IndexGateway()).run(
             task,
             repository,
             resume_stage="test_result_saved",

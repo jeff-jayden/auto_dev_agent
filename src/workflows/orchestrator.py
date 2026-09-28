@@ -10,10 +10,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from agents import (
-    CodeReviewerAgent,
-    GenericDeveloperAgent,
-    LocalPlanningAgent,
-    MergeRequestWriter,
+    CodeReviewAgent,
+    CodeDevelopmentAgent,
+    RequirementPlanningAgent,
+    MergeRequestBuilder,
 )
 from domain.models import (
     Approval,
@@ -38,12 +38,12 @@ class TaskOrchestrator:
     def __init__(
         self,
         store: SQLiteTaskStore,
-        planner: LocalPlanningAgent,
+        requirement_planning_agent: RequirementPlanningAgent,
         workspace_manager: WorkspaceManager,
         repository_analyzer: RepositoryAnalyzer,
-        generic_developer: GenericDeveloperAgent,
-        mr_writer: MergeRequestWriter,
-        code_reviewer: CodeReviewerAgent,
+        code_development_agent: CodeDevelopmentAgent,
+        merge_request_builder: MergeRequestBuilder,
+        code_review_agent: CodeReviewAgent,
         github_delivery: GitHubDeliveryService | None = None,
         tracer=None,
         figma_client: FigmaMCPClient | None = None,
@@ -51,12 +51,12 @@ class TaskOrchestrator:
         workflow_state: WorkflowStateStore | None = None,
     ):
         self.store = store
-        self.planner = planner
+        self.requirement_planning_agent = requirement_planning_agent
         self.workspace_manager = workspace_manager
         self.repository_analyzer = repository_analyzer
-        self.generic_developer = generic_developer
-        self.mr_writer = mr_writer
-        self.code_reviewer = code_reviewer
+        self.code_development_agent = code_development_agent
+        self.merge_request_builder = merge_request_builder
+        self.code_review_agent = code_review_agent
         self.github_delivery = github_delivery
         self.tracer = tracer
         self.figma_client = figma_client
@@ -190,7 +190,7 @@ class TaskOrchestrator:
 
         failure_context = self._failure_context(task)
         diagnosed_files = self._diagnose_failure_files(Path(task.workspace), failure_context)
-        dependency_files = self.planner.ensure_dependency_scope(
+        dependency_files = self.requirement_planning_agent.ensure_dependency_scope(
             task.technical_plan,
             task.repository_analysis,
             task.requirement,
@@ -326,15 +326,15 @@ class TaskOrchestrator:
 
     def _graph_plan(self, state: TaskDeliveryState) -> dict:
         task = state["task"]
-        span = self.tracer.span("agent.plan", kind="agent") if self.tracer else None
+        span = self.tracer.span("agent.requirement_planning", kind="agent") if self.tracer else None
         if span:
             with span:
-                task.analysis, task.technical_plan = self.planner.plan(
+                task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
                     task.title, task.requirement, task.repository_analysis,
                     task.design_reference.context if task.design_reference else "",
                 )
         else:
-            task.analysis, task.technical_plan = self.planner.plan(
+            task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
                 task.title, task.requirement, task.repository_analysis,
                 task.design_reference.context if task.design_reference else "",
             )
@@ -467,7 +467,7 @@ class TaskOrchestrator:
         if task.metadata.pop("review_repair_pending", False):
             self._transition(task, TaskStatus.REVIEW_REPAIRING)
             self._event(task, "risk_approved", f"{actor} 已批准 CR 高风险修复", {"comment": comment})
-            outcome = self.generic_developer.run(
+            outcome = self.code_development_agent.run(
                 task,
                 Path(task.workspace),
                 approved_proposal=proposal,
@@ -552,7 +552,7 @@ class TaskOrchestrator:
                     "已批准的方案或索引快照发生变化，请重新审批",
                 )
                 return task
-            if not self.generic_developer.model_gateway.enabled:
+            if not self.code_development_agent.model_gateway.enabled:
                 raise ValueError(
                     "No model provider is configured. Real-repository development requires an LLM."
                 )
@@ -583,7 +583,7 @@ class TaskOrchestrator:
                     resume_payload=resume_payload,
                 )
             else:
-                outcome = self.generic_developer.run(
+                outcome = self.code_development_agent.run(
                     task,
                     workspace,
                     approved_proposal=approved_proposal,
@@ -655,7 +655,7 @@ class TaskOrchestrator:
                 "step_count": len(task.technical_plan.development_steps),
             })
         scope = self.tracer.span(
-            "agent.developer_session",
+            "agent.code_development_session",
             kind="agent",
             attributes={
                 "developer_session_id": session_id,
@@ -690,7 +690,7 @@ class TaskOrchestrator:
         resume_payload: dict | None = None,
         session_id: str,
     ):
-        from agents.generic_developer import DeveloperRunOutcome
+        from agents.code_development_agent import DevelopmentRunOutcome
 
         steps = task.technical_plan.development_steps
         existing = {item.step_id: item for item in task.step_executions}
@@ -735,12 +735,12 @@ class TaskOrchestrator:
                 current_resume_stage == "test_result_saved"
                 and current_resume_payload.get("success")
             ):
-                outcome = DeveloperRunOutcome(
+                outcome = DevelopmentRunOutcome(
                     kind="success",
                     result=ExecutionResult.model_validate(current_resume_payload["result"]),
                 )
             else:
-                outcome = self.generic_developer.run(
+                outcome = self.code_development_agent.run(
                     task,
                     workspace,
                     dependency_repository=Path(repository_config.local_path),
@@ -777,7 +777,7 @@ class TaskOrchestrator:
             if outcome.kind == "paused":
                 execution.status = "paused"
                 latest_result = outcome.result or latest_result
-                return DeveloperRunOutcome(
+                return DevelopmentRunOutcome(
                     kind="paused", attempts=all_attempts, result=latest_result,
                     paused_at=outcome.paused_at,
                 )
@@ -787,7 +787,7 @@ class TaskOrchestrator:
                 self._event(task, "development_step_failed", f"步骤失败：{step.title}", {
                     "step_id": step.id, "step_index": index, "error": execution.error,
                 })
-                return DeveloperRunOutcome(
+                return DevelopmentRunOutcome(
                     kind=outcome.kind,
                     attempts=all_attempts,
                     pending_proposal=outcome.pending_proposal,
@@ -811,8 +811,8 @@ class TaskOrchestrator:
             resume_index = None
 
         if latest_result is None:
-            return DeveloperRunOutcome(kind="failed", attempts=all_attempts, error="No development step produced a result")
-        return DeveloperRunOutcome(kind="success", attempts=all_attempts, result=latest_result)
+            return DevelopmentRunOutcome(kind="failed", attempts=all_attempts, error="No development step produced a result")
+        return DevelopmentRunOutcome(kind="success", attempts=all_attempts, result=latest_result)
 
     def run_review(self, task_id: str) -> Task:
         return self.delivery_graph.review(task_id)
@@ -843,7 +843,7 @@ class TaskOrchestrator:
             not rollback_requested
             and (
                 repository.execution_mode != "plan_only"
-                or not self.generic_developer.model_gateway.enabled
+                or not self.code_development_agent.model_gateway.enabled
             )
         ):
             raise ValueError("User feedback repair requires a configured Developer Agent")
@@ -884,7 +884,7 @@ class TaskOrchestrator:
             "用户在发布 PR 前验收代码后提出以下修改意见。必须基于当前工作区继续修改，"
             "保留此前正确实现，不要新建任务：\n- " + normalized_feedback
         )
-        outcome = self.generic_developer.run(
+        outcome = self.code_development_agent.run(
             task,
             Path(task.workspace),
             dependency_repository=Path(repository.local_path),
@@ -967,7 +967,7 @@ class TaskOrchestrator:
         task.repository_analysis = self.repository_analyzer.analyze(
             repository_path, task.requirement
         )
-        task.analysis, task.technical_plan = self.planner.plan(
+        task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
             task.title, task.requirement, task.repository_analysis,
             task.design_reference.context if task.design_reference else "",
         )
@@ -1264,7 +1264,7 @@ class TaskOrchestrator:
                     ),
                 },
             )
-        return self.mr_writer.write(task)
+        return self.merge_request_builder.write(task)
 
     def run_ui_acceptance(self, task_id: str) -> Task:
         task = self._require_task(task_id)
@@ -1285,7 +1285,7 @@ class TaskOrchestrator:
             },
         )
         if task.merge_request:
-            task.merge_request = self.mr_writer.write(task)
+            task.merge_request = self.merge_request_builder.write(task)
             self.store.save_task(task)
         return task
 
@@ -1294,7 +1294,7 @@ class TaskOrchestrator:
 
         def review_node(_state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEWING)
-            review = self.code_reviewer.review(task, len(task.reviews) + 1)
+            review = self.code_review_agent.review(task, len(task.reviews) + 1)
             task.reviews.append(review)
             self._event(
                 task,
@@ -1322,7 +1322,7 @@ class TaskOrchestrator:
                 task.error = "Automatic review repair exhausted after 3 review rounds"
                 self._event(task, "review_repair_exhausted", "已达到三轮 Code Review 上限，等待人工处理")
                 return {"route": "done", "review": review}
-            if repository_config.execution_mode != "plan_only" or not self.generic_developer.model_gateway.enabled:
+            if repository_config.execution_mode != "plan_only" or not self.code_development_agent.model_gateway.enabled:
                 task.error = "Blocking review findings require a configured Developer Agent"
                 self._event(task, "review_repair_unavailable", "当前执行模式无法自动修复 CR 问题")
                 return {"route": "done", "review": review}
@@ -1336,7 +1336,7 @@ class TaskOrchestrator:
         def repair_node(state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEW_REPAIRING)
             feedback = state["feedback"]
-            outcome = self.generic_developer.run(
+            outcome = self.code_development_agent.run(
                 task,
                 Path(task.workspace),
                 dependency_repository=Path(repository_config.local_path),
@@ -1370,7 +1370,7 @@ class TaskOrchestrator:
             self._event(task, "merge_request_regenerated", "CR 修复测试通过，已重新生成 MR 草稿")
             return {"route": "review"}
 
-        return self.code_reviewer.run_loop(task, review_node, repair_node)
+        return self.code_review_agent.run_loop(task, review_node, repair_node)
 
     def _append_attempts(self, task: Task, attempts, label: str = "CR 修复尝试") -> None:
         offset = len(task.development_attempts)
@@ -1718,7 +1718,7 @@ class TaskOrchestrator:
         raise ValueError(f"Unsupported checkpoint stage: {checkpoint.stage}")
 
     def _resume_review_developer_checkpoint(self, task, repository, checkpoint, handler) -> Task:
-        outcome = self.generic_developer.run(
+        outcome = self.code_development_agent.run(
             task,
             Path(task.workspace),
             dependency_repository=Path(repository.local_path),
@@ -1750,11 +1750,11 @@ class TaskOrchestrator:
         if len(task.reviews) >= 3:
             task.error = "Automatic review repair exhausted after 3 review rounds"
             return task
-        if repository.execution_mode != "plan_only" or not self.generic_developer.model_gateway.enabled:
+        if repository.execution_mode != "plan_only" or not self.code_development_agent.model_gateway.enabled:
             task.error = "Blocking review findings require a configured Developer Agent"
             return task
         self._transition(task, TaskStatus.REVIEW_REPAIRING)
-        outcome = self.generic_developer.run(
+        outcome = self.code_development_agent.run(
             task,
             Path(task.workspace),
             dependency_repository=Path(repository.local_path),
@@ -1890,7 +1890,7 @@ class TaskOrchestrator:
             if repository is None:
                 raise ValueError("Repository not found")
             task.repository_analysis = self.repository_analyzer.analyze(Path(repository.local_path), enriched_requirement)
-        task.analysis, task.technical_plan = self.planner.plan(
+        task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
             task.title, enriched_requirement, task.repository_analysis,
             task.design_reference.context if task.design_reference else "",
         )

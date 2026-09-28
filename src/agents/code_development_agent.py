@@ -21,11 +21,11 @@ from domain.models import (
 from llm import ModelGateway
 from tools import DeveloperToolkit, PatchRejected, ToolPolicy
 
-from .context_explorer import DeveloperContextExplorer
+from .repository_exploration_agent import RepositoryExplorationAgent
 
 
 @dataclass
-class DeveloperRunOutcome:
+class DevelopmentRunOutcome:
     kind: str
     attempts: list[DevelopmentAttempt] = field(default_factory=list)
     result: ExecutionResult | None = None
@@ -35,7 +35,7 @@ class DeveloperRunOutcome:
     paused_at: str | None = None
 
 
-class DeveloperLoopState(TypedDict, total=False):
+class DevelopmentLoopState(TypedDict, total=False):
     attempt_number: int
     approved_proposal: DevelopmentProposal | None
     repair_context: str
@@ -53,15 +53,15 @@ class DeveloperLoopState(TypedDict, total=False):
     execution: Any
     diff: str
     route: str
-    outcome: DeveloperRunOutcome
+    outcome: DevelopmentRunOutcome
 
 
-class GenericDeveloperAgent:
+class CodeDevelopmentAgent:
     def __init__(self, model_gateway: ModelGateway, max_attempts: int = 3, tracer=None):
         self.model_gateway = model_gateway
         self.max_attempts = max_attempts
         self.tracer = tracer
-        self.context_explorer = DeveloperContextExplorer(model_gateway, tracer=tracer)
+        self.repository_exploration_agent = RepositoryExplorationAgent(model_gateway, tracer=tracer)
 
     def _span(self, name: str, kind: str = "tool", **attributes):
         return self.tracer.span(name, kind=kind, attributes=attributes) if self.tracer else nullcontext(None)
@@ -81,22 +81,22 @@ class GenericDeveloperAgent:
         step_context: dict | None = None,
         session_context: dict[str, str] | None = None,
         session_files: list[str] | None = None,
-    ) -> DeveloperRunOutcome:
+    ) -> DevelopmentRunOutcome:
         if not self.model_gateway.enabled:
-            return DeveloperRunOutcome(
+            return DevelopmentRunOutcome(
                 kind="failed",
                 error="No model provider is configured. Real-repository development requires an LLM.",
             )
         if task.repository_analysis is None or task.technical_plan is None:
-            return DeveloperRunOutcome(kind="failed", error="Repository analysis or technical plan is missing")
+            return DevelopmentRunOutcome(kind="failed", error="Repository analysis or technical plan is missing")
         test_command = task.repository_analysis.test_command
         if not test_command:
-            return DeveloperRunOutcome(kind="failed", error="No approved test command was detected for this repository")
+            return DevelopmentRunOutcome(kind="failed", error="No approved test command was detected for this repository")
 
         write_scope = list(dict.fromkeys(allowed_files or task.technical_plan.affected_files))
         approved_scope = set(task.technical_plan.affected_files)
         if not write_scope or any(path not in approved_scope for path in write_scope):
-            return DeveloperRunOutcome(kind="failed", error="Development step contains files outside the approved plan")
+            return DevelopmentRunOutcome(kind="failed", error="Development step contains files outside the approved plan")
         policy = ToolPolicy(repository, write_scope, test_command)
         toolkit = DeveloperToolkit(repository, policy, dependency_repository)
         session_context = session_context if session_context is not None else {}
@@ -141,7 +141,7 @@ class GenericDeveloperAgent:
                     tool_calls=toolkit.audit[audit_start:],
                 ))
                 if execution.exit_code == 0:
-                    return DeveloperRunOutcome(
+                    return DevelopmentRunOutcome(
                         kind="success",
                         attempts=attempts,
                         result=ExecutionResult(
@@ -178,7 +178,7 @@ class GenericDeveloperAgent:
                     tool_calls=toolkit.audit[audit_start:],
                 ))
                 if execution.exit_code == 0 and diff:
-                    return DeveloperRunOutcome(
+                    return DevelopmentRunOutcome(
                         kind="success",
                         attempts=attempts,
                         result=ExecutionResult(
@@ -235,17 +235,17 @@ class GenericDeveloperAgent:
         step_context: dict | None,
         checkpoint_handler: Callable[[str, str, dict], bool] | None,
         high_risk_approved: bool,
-        initial_state: DeveloperLoopState,
-    ) -> DeveloperRunOutcome:
+        initial_state: DevelopmentLoopState,
+    ) -> DevelopmentRunOutcome:
         """Run the bounded Developer repair loop as explicit LangGraph nodes."""
         if initial_state["attempt_number"] > self.max_attempts:
-            return DeveloperRunOutcome(
+            return DevelopmentRunOutcome(
                 kind="failed",
                 attempts=initial_state["attempts"],
                 error=f"Automatic repair exhausted after {self.max_attempts} attempts",
             )
 
-        def prepare(state: DeveloperLoopState) -> dict:
+        def prepare(state: DevelopmentLoopState) -> dict:
             attempt_number = state["attempt_number"]
             attempts = state["attempts"]
             repair_context = state.get("repair_context", "")
@@ -264,7 +264,7 @@ class GenericDeveloperAgent:
                 context = dict(session_context)
                 context.update(toolkit.read_context(context_paths))
             with self._span("agent.context_exploration", kind="agent", initial_file_count=len(context)):
-                context = self.context_explorer.explore(
+                context = self.repository_exploration_agent.explore(
                     task=task,
                     toolkit=toolkit,
                     initial_context=context,
@@ -290,7 +290,7 @@ class GenericDeveloperAgent:
                 suffix = f": {detail}" if detail else ""
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="failed",
                         attempts=attempts,
                         error=f"Model did not return a valid structured patch proposal{suffix}",
@@ -303,14 +303,14 @@ class GenericDeveloperAgent:
             if risk.level == "forbidden":
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="failed", attempts=attempts, error="; ".join(risk.reasons)
                     ),
                 }
             if risk.level == "high" and not (using_approved_proposal and high_risk_approved):
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="risk_approval",
                         attempts=attempts,
                         pending_proposal=proposal,
@@ -327,7 +327,7 @@ class GenericDeveloperAgent:
                 "route": "apply",
             }
 
-        def apply_and_test(state: DeveloperLoopState) -> dict:
+        def apply_and_test(state: DevelopmentLoopState) -> dict:
             attempt_number = state["attempt_number"]
             attempts = state["attempts"]
             proposal = state["proposal"]
@@ -346,7 +346,7 @@ class GenericDeveloperAgent:
             ):
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="paused", attempts=attempts, paused_at="proposal_ready"
                     ),
                 }
@@ -371,7 +371,7 @@ class GenericDeveloperAgent:
                         "skip_apply": False,
                         "resumed_changed_files": [],
                         "route": "done",
-                        "outcome": DeveloperRunOutcome(
+                        "outcome": DevelopmentRunOutcome(
                             kind="paused", attempts=attempts, paused_at="patch_applied"
                         ),
                     }
@@ -421,7 +421,7 @@ class GenericDeveloperAgent:
                 if next_attempt > self.max_attempts:
                     return {
                         "route": "done",
-                        "outcome": DeveloperRunOutcome(
+                        "outcome": DevelopmentRunOutcome(
                             kind="failed",
                             attempts=attempts,
                             error=f"Automatic repair exhausted after {self.max_attempts} attempts",
@@ -435,7 +435,7 @@ class GenericDeveloperAgent:
                     "route": "retry",
                 }
 
-        def evaluate(state: DeveloperLoopState) -> dict:
+        def evaluate(state: DevelopmentLoopState) -> dict:
             attempt_number = state["attempt_number"]
             attempts = state["attempts"]
             proposal = state["proposal"]
@@ -482,14 +482,14 @@ class GenericDeveloperAgent:
                         "review_feedback": review_feedback,
                     },
                 ):
-                    outcome = DeveloperRunOutcome(
+                    outcome = DevelopmentRunOutcome(
                         kind="paused",
                         attempts=attempts,
                         result=result,
                         paused_at="test_result_saved",
                     )
                 else:
-                    outcome = DeveloperRunOutcome(
+                    outcome = DevelopmentRunOutcome(
                         kind="success", attempts=attempts, result=result
                     )
                 return {"route": "done", "outcome": outcome}
@@ -505,7 +505,7 @@ class GenericDeveloperAgent:
                     toolkit.restore_files(state["context"], changed_files)
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="failed",
                         attempts=attempts,
                         error="The same test failure repeated; automatic repair stopped early",
@@ -528,7 +528,7 @@ class GenericDeveloperAgent:
             ):
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="paused", attempts=attempts, paused_at="test_result_saved"
                     ),
                 }
@@ -536,7 +536,7 @@ class GenericDeveloperAgent:
             if next_attempt > self.max_attempts:
                 return {
                     "route": "done",
-                    "outcome": DeveloperRunOutcome(
+                    "outcome": DevelopmentRunOutcome(
                         kind="failed",
                         attempts=attempts,
                         error=f"Automatic repair exhausted after {self.max_attempts} attempts",
@@ -549,7 +549,7 @@ class GenericDeveloperAgent:
                 "route": "retry",
             }
 
-        graph = StateGraph(DeveloperLoopState)
+        graph = StateGraph(DevelopmentLoopState)
         graph.add_node("prepare", prepare)
         graph.add_node("apply_and_test", apply_and_test)
         graph.add_node("evaluate", evaluate)
@@ -569,7 +569,7 @@ class GenericDeveloperAgent:
             lambda state: state["route"],
             {"retry": "prepare", "done": END},
         )
-        final_state = graph.compile(name="developer-repair-loop").invoke(initial_state)
+        final_state = graph.compile(name="code-development-repair-loop").invoke(initial_state)
         return final_state["outcome"]
 
     def _request_proposal(

@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from agents.context_explorer import ContextToolDecision
-from agents.context_explorer import DeveloperContextExplorer
-from agents.context_explorer import DeveloperContextToolRegistry
-from agents.generic_developer import GenericDeveloperAgent
+from agents.repository_exploration_agent import RepositoryToolDecision
+from agents.repository_exploration_agent import RepositoryExplorationAgent
+from agents.repository_exploration_agent import RepositoryExplorationToolRegistry
+from agents.code_development_agent import CodeDevelopmentAgent
 from domain.models import (
     RepositoryAnalysis,
     RepositoryContextPack,
@@ -55,22 +55,22 @@ class DeveloperContextToolTests(unittest.TestCase):
                 self.proposal_prompt = ""
 
             def generate_structured(self, system_prompt, user_prompt, output_model):
-                if output_model is ContextToolDecision:
+                if output_model is RepositoryToolDecision:
                     self.decisions += 1
                     if self.decisions == 1:
-                        return ContextToolDecision(
+                        return RepositoryToolDecision(
                             tool="search_symbol", arguments={"query": "HiddenHelper"},
                             reason="需要定位需求涉及的辅助类型",
                         )
                     if self.decisions == 2:
                         observation = json.loads(user_prompt)["recent_observations"][-1]["result"]
                         self.assert_search_result = observation
-                        return ContextToolDecision(
+                        return RepositoryToolDecision(
                             tool="read_file",
                             arguments={"path": "helper.py", "start_line": 1, "end_line": 20},
                             reason="需要阅读搜索命中的实现",
                         )
-                    return ContextToolDecision(
+                    return RepositoryToolDecision(
                         tool="finish", reason="上下文已经足够", summary="已确认辅助类型定义",
                     )
                 if output_model is ReplacementDevelopmentProposal:
@@ -104,7 +104,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         )
         gateway = ToolLoopGateway()
 
-        outcome = GenericDeveloperAgent(gateway).run(task, self.repository)
+        outcome = CodeDevelopmentAgent(gateway).run(task, self.repository)
 
         self.assertEqual(outcome.kind, "success")
         self.assertEqual(gateway.decisions, 3)
@@ -168,7 +168,7 @@ class DeveloperContextToolTests(unittest.TestCase):
         )
         gateway = RepairGateway()
 
-        outcome = GenericDeveloperAgent(gateway).run(task, self.repository)
+        outcome = CodeDevelopmentAgent(gateway).run(task, self.repository)
 
         self.assertEqual(outcome.kind, "success")
         self.assertEqual(gateway.proposals, 2)
@@ -185,12 +185,12 @@ class DeveloperContextToolTests(unittest.TestCase):
             self.repository,
             ToolPolicy(self.repository, ["main.py"], "python -m py_compile main.py"),
         )
-        registry = DeveloperContextToolRegistry(toolkit)
+        registry = RepositoryExplorationToolRegistry(toolkit)
         with self.assertRaises(ValueError):
             registry.invoke("read_file", {})
         with self.assertRaises(ValueError):
             registry.invoke("search_text", {})
-        decision = ContextToolDecision(tool="finish", reason="证据充分")
+        decision = RepositoryToolDecision(tool="finish", reason="证据充分")
         self.assertEqual(decision.tool, "finish")
 
     def test_langchain_registry_exposes_schemas_and_invokes_tools(self):
@@ -200,7 +200,7 @@ class DeveloperContextToolTests(unittest.TestCase):
             self.repository,
             ToolPolicy(self.repository, ["main.py"], "python -m py_compile main.py"),
         )
-        registry = DeveloperContextToolRegistry(toolkit)
+        registry = RepositoryExplorationToolRegistry(toolkit)
         specifications = {item["name"]: item for item in registry.specifications()}
 
         self.assertEqual(
@@ -265,10 +265,10 @@ class DeveloperContextToolTests(unittest.TestCase):
         )
 
         with patch(
-            "agents.context_explorer.create_agent",
+            "agents.repository_exploration_agent.create_agent",
             side_effect=lambda *, model, tools, system_prompt: FakeCompiledAgent(tools),
         ) as create:
-            context = DeveloperContextExplorer(CreateAgentGateway(), max_steps=4).explore(
+            context = RepositoryExplorationAgent(CreateAgentGateway(), max_steps=4).explore(
                 task=task,
                 toolkit=toolkit,
                 initial_context={"main.py": 'VALUE = "old"\n'},

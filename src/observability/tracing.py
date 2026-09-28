@@ -132,7 +132,7 @@ class TracingModelGateway:
                 span.attributes["prompt_tokens"] = int(usage.get("prompt_tokens", len(prompt) // 4))
                 serialized = result.model_dump_json() if result is not None else "null"
                 span.attributes["completion_tokens"] = int(usage.get("completion_tokens", len(serialized) // 4))
-                if output_model.__name__ == "ContextToolDecision" and result is not None:
+                if output_model.__name__ == "RepositoryToolDecision" and result is not None:
                     decision = result.model_dump()
                     selected_tool = str(decision.get("tool", "unknown"))
                     reason = str(decision.get("reason", ""))[:500]

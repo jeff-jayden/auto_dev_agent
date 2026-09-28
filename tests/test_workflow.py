@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from tests.support import build_orchestrator
-from agents import DeveloperRunOutcome
+from agents import DevelopmentRunOutcome
 from domain.models import (
     DevelopmentAttempt,
     DevelopmentProposal,
@@ -68,7 +68,7 @@ class WorkflowTests(unittest.TestCase):
 """
         completed.merge_request.changed_files = ["task_service.py"]
 
-        review = orchestrator.code_reviewer.review(completed, 2)
+        review = orchestrator.code_review_agent.review(completed, 2)
 
         self.assertEqual(review.decision, "changes_requested")
         self.assertTrue(review.findings[0].blocking)
@@ -96,7 +96,7 @@ class WorkflowTests(unittest.TestCase):
 +function App() { return <button onClick={() => missingHandler()}>点击</button>; }
 """
 
-        review = orchestrator.code_reviewer.review(completed, 2)
+        review = orchestrator.code_review_agent.review(completed, 2)
         messages = [item.message for item in review.findings if item.blocking]
 
         self.assertEqual(review.decision, "changes_requested")
@@ -138,7 +138,7 @@ diff --git a/index.js b/index.js
 +root.render(<main>replacement</main>);
 """
 
-        review = orchestrator.code_reviewer.review(completed, 2)
+        review = orchestrator.code_review_agent.review(completed, 2)
         messages = [item.message for item in review.findings if item.blocking]
 
         self.assertEqual(review.decision, "changes_requested")
@@ -167,8 +167,8 @@ diff --git a/index.js b/index.js
                     )],
                 )
 
-        orchestrator.code_reviewer.model_gateway = AcceptanceGateway()
-        review = orchestrator.code_reviewer.review(completed, 2)
+        orchestrator.code_review_agent.model_gateway = AcceptanceGateway()
+        review = orchestrator.code_review_agent.review(completed, 2)
 
         self.assertEqual(review.decision, "changes_requested")
         self.assertTrue(any(item.blocking for item in review.findings if item.category == "Functionality"))
@@ -251,7 +251,7 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
 """
         completed.technical_plan.affected_files.append("tests/task_service.test.js")
 
-        review = orchestrator.code_reviewer.review(completed, 2)
+        review = orchestrator.code_review_agent.review(completed, 2)
 
         messages = [item.message for item in review.findings]
         self.assertFalse(any("setActivePage" in message and "未定义" in message for message in messages))
@@ -290,7 +290,7 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
             def run(self, retried_task, repository_path, **kwargs):
                 self.scope = list(retried_task.technical_plan.affected_files)
                 self.repair_context = kwargs["resume_payload"]["repair_context"]
-                return DeveloperRunOutcome(
+                return DevelopmentRunOutcome(
                     kind="risk_approval",
                     pending_proposal=DevelopmentProposal(
                         replacements=[TextReplacement(
@@ -304,7 +304,7 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
                 )
 
         retry_developer = RetryDeveloper()
-        orchestrator.generic_developer = retry_developer
+        orchestrator.code_development_agent = retry_developer
 
         retried = orchestrator.retry_failed_task(task.id, "retry-job")
 
@@ -339,10 +339,10 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
 
             def run(self, retried_task, repository_path, **kwargs):
                 self.scope = list(retried_task.technical_plan.affected_files)
-                return DeveloperRunOutcome(kind="failed", error="stop")
+                return DevelopmentRunOutcome(kind="failed", error="stop")
 
         developer = RetryDeveloper()
-        orchestrator.generic_developer = developer
+        orchestrator.code_development_agent = developer
 
         retried = orchestrator.retry_failed_task(task.id, "retry-wiring")
 
@@ -369,10 +369,10 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
                     target.read_text(encoding="utf-8") + "\n# clearer priority documentation\n",
                     encoding="utf-8",
                 )
-                return DeveloperRunOutcome(kind="success", result=current_task.result)
+                return DevelopmentRunOutcome(kind="success", result=current_task.result)
 
         developer = FeedbackDeveloper()
-        orchestrator.generic_developer = developer
+        orchestrator.code_development_agent = developer
 
         updated = orchestrator.apply_user_feedback(
             task.id,
@@ -418,10 +418,10 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
                     changed.read_text(encoding="utf-8") + "\n# temporary feedback change\n",
                     encoding="utf-8",
                 )
-                return DeveloperRunOutcome(kind="success", result=current_task.result)
+                return DevelopmentRunOutcome(kind="success", result=current_task.result)
 
         developer = FeedbackDeveloper()
-        orchestrator.generic_developer = developer
+        orchestrator.code_development_agent = developer
         changed = orchestrator.apply_user_feedback(
             task.id, "tester", "补充临时说明。"
         )

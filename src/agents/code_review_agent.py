@@ -18,7 +18,7 @@ class ReviewLoopState(TypedDict, total=False):
     feedback: str
 
 
-class CodeReviewerAgent:
+class CodeReviewAgent:
     """Independent reviewer combining deterministic gates with bounded model feedback."""
 
     BLOCKING_SEVERITIES = {"high", "critical"}

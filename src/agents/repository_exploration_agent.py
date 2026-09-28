@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from domain.models import ToolCallAudit
 
 
-class ContextToolDecision(BaseModel):
+class RepositoryToolDecision(BaseModel):
     """A model-selected LangChain tool call, or the terminal finish action."""
 
     tool: str = Field(min_length=1, max_length=100)
@@ -22,7 +22,7 @@ class ContextToolDecision(BaseModel):
     summary: str = Field(default="", max_length=1200)
 
 
-class DeveloperContextExplorer:
+class RepositoryExplorationAgent:
     """Bounded observe-decide-act loop for read-only repository exploration.
 
     Writes, tests, shell commands and workflow routing intentionally remain in
@@ -59,7 +59,7 @@ class DeveloperContextExplorer:
             return initial_context
 
         context = dict(initial_context)
-        registry = DeveloperContextToolRegistry(
+        registry = RepositoryExplorationToolRegistry(
             toolkit, tracer=self.tracer, max_calls=self.max_steps,
         )
         if callable(getattr(self.model_gateway, "build_langchain_model", None)):
@@ -80,7 +80,7 @@ class DeveloperContextExplorer:
                     summary=f"create_agent 不可用，切回兼容决策循环：{str(error)[:500]}",
                     success=False,
                 ))
-                registry = DeveloperContextToolRegistry(
+                registry = RepositoryExplorationToolRegistry(
                     toolkit, tracer=self.tracer, max_calls=self.max_steps,
                 )
 
@@ -117,14 +117,14 @@ class DeveloperContextExplorer:
                 "step": step,
                 "remaining_steps": self.max_steps - step + 1,
                 "tools": registry.specifications(),
-                "output_schema": ContextToolDecision.model_json_schema(),
+                "output_schema": RepositoryToolDecision.model_json_schema(),
             }
             decision = self.model_gateway.generate_structured(
                 system_prompt,
                 json.dumps(payload, ensure_ascii=False),
-                ContextToolDecision,
+                RepositoryToolDecision,
             )
-            if not isinstance(decision, ContextToolDecision):
+            if not isinstance(decision, RepositoryToolDecision):
                 toolkit.audit.append(ToolCallAudit(
                     tool="agent.context_decision",
                     summary="上下文探索器未返回有效动作，沿用已有上下文",
@@ -193,7 +193,7 @@ class DeveloperContextExplorer:
         *,
         task,
         toolkit,
-        registry: DeveloperContextToolRegistry,
+        registry: RepositoryExplorationToolRegistry,
         context: dict[str, str],
         write_scope: list[str],
         repair_context: str,
@@ -289,11 +289,11 @@ class DeveloperContextExplorer:
         return totals
 
     @staticmethod
-    def _tool_arguments(decision: ContextToolDecision) -> dict:
+    def _tool_arguments(decision: RepositoryToolDecision) -> dict:
         return dict(decision.arguments)
 
     @classmethod
-    def _action_signature(cls, decision: ContextToolDecision) -> str:
+    def _action_signature(cls, decision: RepositoryToolDecision) -> str:
         return json.dumps(
             {"tool": decision.tool, **cls._tool_arguments(decision)},
             ensure_ascii=False,
@@ -323,7 +323,7 @@ class GitHistoryInput(BaseModel):
     reason: str = Field(default="", max_length=500, description="为什么当前需要查看历史")
 
 
-class DeveloperContextToolRegistry:
+class RepositoryExplorationToolRegistry:
     """LangChain tool registry backed by the project's policy-aware toolkit."""
 
     def __init__(self, toolkit, *, tracer=None, max_calls: int = 8):

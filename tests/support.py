@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 from apps.api.main import build_orchestrator as build_production_orchestrator
-from agents import DeveloperRunOutcome
+from agents import DevelopmentRunOutcome
 from domain.models import DevelopmentAttempt, ExecutionResult
 
 
@@ -56,12 +56,12 @@ class FixtureDeveloper:
 
     def run(self, task, workspace, checkpoint_handler=None, **_kwargs):
         if checkpoint_handler and checkpoint_handler("proposal_ready", "apply_patch", {}):
-            return DeveloperRunOutcome(kind="paused", paused_at="proposal_ready")
+            return DevelopmentRunOutcome(kind="paused", paused_at="proposal_ready")
         (workspace / "task_service.py").write_text(UPDATED_SERVICE, encoding="utf-8")
         (workspace / "tests" / "test_task_service.py").write_text(UPDATED_TEST, encoding="utf-8")
         changed = ["task_service.py", "tests/test_task_service.py"]
         if checkpoint_handler and checkpoint_handler("patch_applied", "run_tests", {"changed_files": changed}):
-            return DeveloperRunOutcome(kind="paused", paused_at="patch_applied")
+            return DevelopmentRunOutcome(kind="paused", paused_at="patch_applied")
         completed = subprocess.run(
             ["python", "-m", "unittest", "discover", "-s", "tests", "-v"],
             cwd=workspace, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -87,8 +87,8 @@ class FixtureDeveloper:
         if checkpoint_handler and checkpoint_handler(
             "test_result_saved", "generate_mr", {"result": result.model_dump(mode="json"), "success": True}
         ):
-            return DeveloperRunOutcome(kind="paused", attempts=[attempt], result=result, paused_at="test_result_saved")
-        return DeveloperRunOutcome(kind="success", attempts=[attempt], result=result)
+            return DevelopmentRunOutcome(kind="paused", attempts=[attempt], result=result, paused_at="test_result_saved")
+        return DevelopmentRunOutcome(kind="success", attempts=[attempt], result=result)
 
 
 def build_orchestrator(runtime_root: Path, model_gateway=None):
@@ -105,5 +105,5 @@ def build_orchestrator(runtime_root: Path, model_gateway=None):
     orchestrator.repository_catalog.allowed_roots.append(runtime_root.parent.resolve())
     orchestrator.repository_catalog.register("测试仓库", repository, repository_id="test-repository")
     if model_gateway is None:
-        orchestrator.generic_developer = FixtureDeveloper()
+        orchestrator.code_development_agent = FixtureDeveloper()
     return orchestrator
