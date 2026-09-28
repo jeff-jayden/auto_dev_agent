@@ -3,16 +3,33 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from dev_agent.domain.models import CodeEvidence, ContextFile, RepositoryContextPack
 
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss"}
 TEST_MARKERS = ("test", "spec", "__tests__")
+SEMANTIC_ALIASES = {
+    "身份": ["auth", "authentication", "identity", "session", "credential"],
+    "校验": ["validate", "verify", "check", "guard"],
+    "鉴权": ["auth", "authorization", "permission", "guard"],
+    "登录": ["login", "signin", "auth", "session"],
+    "导出": ["export", "download", "writer", "serialize"],
+    "报表": ["report", "analytics", "summary"],
+    "逗号分隔": ["csv", "comma", "delimiter"],
+    "重试": ["retry", "backoff", "attempt"],
+    "重新执行": ["retry", "rerun", "requeue"],
+    "超时": ["timeout", "deadline", "expired"],
+    "缓存": ["cache", "memo", "redis"],
+    "弹窗": ["modal", "dialog", "alert", "popup"],
+    "历史": ["history", "audit", "timeline", "record"],
+}
 
 
 class RepositoryCodeIndex:
@@ -81,29 +98,12 @@ class RepositoryCodeIndex:
     ) -> tuple[RepositoryContextPack, list[CodeEvidence]]:
         records: dict[str, dict] = index.get("files", {})
         terms = self._requirement_terms(requirement)
-        scores: dict[str, int] = {}
+        ranked_hits = self.rank_files(index, requirement, strategy="hybrid")
+        scores = {item["path"]: int(round(item["score"] * 1000)) for item in ranked_hits}
         reasons: dict[str, list[str]] = {}
-        for path, record in records.items():
-            score = 0
-            matched = [term for term in terms if term in record.get("search_text", "")]
-            if matched:
-                score += min(20, len(matched) * 5)
-                reasons.setdefault(path, []).append("匹配需求关键词：" + ", ".join(matched[:5]))
-            symbol_matches = [
-                symbol for symbol in record.get("symbols", [])
-                if any(term in symbol.lower() for term in terms)
-            ]
-            if symbol_matches:
-                score += min(15, len(symbol_matches) * 5)
-                reasons.setdefault(path, []).append("命中代码符号：" + ", ".join(symbol_matches[:4]))
-            name = Path(path).stem.lower()
-            if any(term in name for term in terms):
-                score += 6
-                reasons.setdefault(path, []).append("文件名与需求相关")
-            if score:
-                scores[path] = score
-
-        ranked = sorted(scores, key=lambda path: (-scores[path], path))
+        for item in ranked_hits:
+            reasons[item["path"]] = list(item["reasons"])
+        ranked = [item["path"] for item in ranked_hits]
         primary = [path for path in ranked if not self._is_test(path)][:6]
         if not primary:
             primary = [path for path in entrypoints if path in records][:3]
@@ -160,7 +160,138 @@ class RepositoryCodeIndex:
             dependency_files=dependencies,
             test_files=tests,
             files=context_files,
+            retrieval_strategy="hybrid_rag_v1",
         ), evidence
+
+    def rank_files(
+        self,
+        index: dict,
+        requirement: str,
+        *,
+        strategy: str = "hybrid",
+    ) -> list[dict]:
+        """Rank indexed files while keeping the legacy scorer as an A/B baseline."""
+        records: dict[str, dict] = index.get("files", {})
+        lexical_scores, lexical_reasons = self._legacy_lexical_scores(records, requirement)
+        if strategy == "lexical":
+            return [
+                {"path": path, "score": float(lexical_scores[path]), "reasons": lexical_reasons[path]}
+                for path in sorted(lexical_scores, key=lambda value: (-lexical_scores[value], value))
+            ]
+        if strategy != "hybrid":
+            raise ValueError(f"Unsupported retrieval strategy: {strategy}")
+
+        semantic_scores = self._semantic_scores(records, requirement)
+        lexical_rank = {
+            path: rank for rank, path in enumerate(
+                sorted(lexical_scores, key=lambda value: (-lexical_scores[value], value)), 1
+            )
+        }
+        semantic_rank = {
+            path: rank for rank, path in enumerate(
+                sorted(semantic_scores, key=lambda value: (-semantic_scores[value], value)), 1
+            )
+        }
+        candidates = set(lexical_scores) | set(semantic_scores)
+        hits = []
+        for path in candidates:
+            # Weighted reciprocal-rank fusion is robust across the unrelated
+            # score scales produced by exact matching and vector similarity.
+            fused = 0.0
+            reasons = list(lexical_reasons.get(path, []))
+            if path in lexical_rank:
+                fused += 0.55 / (20 + lexical_rank[path])
+            if path in semantic_rank:
+                fused += 0.45 / (20 + semantic_rank[path])
+                reasons.append(f"语义向量相似度 {semantic_scores[path]:.3f}")
+            hits.append({"path": path, "score": fused, "reasons": reasons})
+        return sorted(hits, key=lambda item: (-item["score"], item["path"]))
+
+    def _legacy_lexical_scores(
+        self, records: dict[str, dict], requirement: str
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
+        terms = self._requirement_terms(requirement)
+        scores: dict[str, int] = {}
+        reasons: dict[str, list[str]] = {}
+        for path, record in records.items():
+            score = 0
+            matched = [term for term in terms if term in record.get("search_text", "")]
+            if matched:
+                score += min(20, len(matched) * 5)
+                reasons.setdefault(path, []).append("匹配需求关键词：" + ", ".join(matched[:5]))
+            symbol_matches = [
+                symbol for symbol in record.get("symbols", [])
+                if any(term in symbol.lower() for term in terms)
+            ]
+            if symbol_matches:
+                score += min(15, len(symbol_matches) * 5)
+                reasons.setdefault(path, []).append("命中代码符号：" + ", ".join(symbol_matches[:4]))
+            name = Path(path).stem.lower()
+            if any(term in name for term in terms):
+                score += 6
+                reasons.setdefault(path, []).append("文件名与需求相关")
+            if score:
+                scores[path] = score
+        return scores, reasons
+
+    def _semantic_scores(self, records: dict[str, dict], requirement: str) -> dict[str, float]:
+        query_tokens = self._semantic_query_tokens(requirement)
+        if not query_tokens:
+            return {}
+        query_vector = self._hashed_vector(query_tokens)
+        scores: dict[str, float] = {}
+        for path, record in records.items():
+            document = "\n".join([
+                path,
+                " ".join(record.get("symbols", [])),
+                record.get("search_text", "")[:40_000],
+            ])
+            score = self._cosine(query_vector, self._hashed_vector(self._tokenize(document)))
+            if score > 0:
+                scores[path] = score
+        return scores
+
+    @classmethod
+    def _semantic_query_tokens(cls, requirement: str) -> list[str]:
+        tokens = cls._tokenize(requirement)
+        lowered = requirement.lower()
+        for phrase, aliases in SEMANTIC_ALIASES.items():
+            if phrase in lowered:
+                tokens.extend(aliases)
+        return list(dict.fromkeys(tokens))
+
+    @staticmethod
+    def _tokenize(value: str) -> list[str]:
+        value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+        english = re.findall(r"[A-Za-z_$][A-Za-z0-9_$-]{1,}", value.lower())
+        chinese_segments = re.findall(r"[\u4e00-\u9fff]+", value)
+        chinese = [
+            segment[index:index + 2]
+            for segment in chinese_segments
+            for index in range(max(1, len(segment) - 1))
+            if len(segment[index:index + 2]) >= 2
+        ]
+        return english + chinese
+
+    @staticmethod
+    def _hashed_vector(tokens: list[str], dimensions: int = 384) -> dict[int, float]:
+        counts = Counter(tokens)
+        vector: dict[int, float] = {}
+        for token, frequency in counts.items():
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            bucket = int.from_bytes(digest[:4], "big") % dimensions
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            vector[bucket] = vector.get(bucket, 0.0) + sign * (1 + math.log(frequency))
+        return vector
+
+    @staticmethod
+    def _cosine(left: dict[int, float], right: dict[int, float]) -> float:
+        left_norm = math.sqrt(sum(value * value for value in left.values()))
+        right_norm = math.sqrt(sum(value * value for value in right.values()))
+        if not left_norm or not right_norm:
+            return 0.0
+        dot = sum(value * right.get(key, 0.0) for key, value in left.items())
+        return max(0.0, dot / (left_norm * right_norm))
 
     def _parse_file(self, repository: Path, relative: str) -> dict:
         target = repository / relative

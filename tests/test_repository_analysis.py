@@ -164,6 +164,32 @@ class RepositoryAnalysisTests(unittest.TestCase):
         self.assertIn("src/index.js", context.dependency_files)
         self.assertIn("src/App.test.js", context.test_files)
 
+    def test_hybrid_rag_recalls_semantic_code_file_missed_by_legacy_keywords(self):
+        repository = self.root / "semantic-repo"
+        repository.mkdir()
+        files = {
+            "auth/session_guard.py": (
+                "class SessionGuard:\n"
+                "    def authenticate_credentials(self, credentials):\n"
+                "        return bool(credentials)\n"
+            ),
+            "reports/dashboard.py": "def render_dashboard():\n    return 'dashboard'\n",
+            "orders/repository.py": "def save_order(order):\n    return order\n",
+        }
+        for relative, content in files.items():
+            target = repository / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        indexer = RepositoryCodeIndex()
+        index, _, _ = indexer.build(repository, list(files), None)
+
+        baseline = indexer.rank_files(index, "增加用户身份校验", strategy="lexical")
+        hybrid = indexer.rank_files(index, "增加用户身份校验", strategy="hybrid")
+
+        self.assertNotIn("auth/session_guard.py", [item["path"] for item in baseline])
+        self.assertEqual(hybrid[0]["path"], "auth/session_guard.py")
+        self.assertTrue(any("语义向量" in reason for reason in hybrid[0]["reasons"]))
+
     def test_code_index_is_cached_and_incrementally_updated_by_git_head(self):
         analyzer = RepositoryAnalyzer(self.root / "indexes")
 

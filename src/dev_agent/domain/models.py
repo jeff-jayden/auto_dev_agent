@@ -95,6 +95,7 @@ class RepositoryContextPack(BaseModel):
     dependency_files: list[str] = Field(default_factory=list)
     test_files: list[str] = Field(default_factory=list)
     files: list[ContextFile] = Field(default_factory=list)
+    retrieval_strategy: str = "hybrid_rag"
 
 
 class RepositoryAnalysis(BaseModel):
