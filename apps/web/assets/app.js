@@ -569,6 +569,7 @@ async function renderObservability(taskId) {
     ["工具调用", metrics.tool_calls], ["Golden Score", evaluation ? `${evaluation.score}%` : "未运行"],
   ];
   $("#metric-cards").innerHTML = cards.map(([label, value]) => `<div class="metric-card"><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></div>`).join("");
+  renderRagComparison(evaluation?.retrieval_comparison);
   const correlation = correlateTimelineEvents(traces, events);
   traceTimelineLinks = correlation.links;
   observabilityTimelineEvents = events;
@@ -583,6 +584,33 @@ async function renderObservability(taskId) {
   $("#replay-button").dataset.checkpointId = checkpoints.length ? checkpoints[checkpoints.length - 1].id : "";
   if (traces.length) await showTrace(traces[0].id);
   else $("#span-list").innerHTML = "<p>选择产生过 Trace 的任务后查看调用链。</p>";
+}
+
+function renderRagComparison(comparison) {
+  const panel = $("#rag-comparison");
+  if (!comparison) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  const metricRows = [
+    ["File Recall@K", "recall_at_k", "%", false],
+    ["MRR", "mrr", "%", false],
+    ["Hit@K", "hit_at_k", "%", false],
+    ["无关文件率", "irrelevant_rate", "%", true],
+    ["平均上下文文件", "average_context_files", "", true],
+  ];
+  const metrics = metricRows.map(([label, key, unit, lowerIsBetter]) => {
+    const before = Number(comparison.baseline[key] ?? 0);
+    const after = Number(comparison.hybrid[key] ?? 0);
+    const delta = Number(comparison.delta[key] ?? 0);
+    const improved = lowerIsBetter ? delta < 0 : delta > 0;
+    const neutral = delta === 0;
+    return `<div class="rag-metric"><small>${escapeHtml(label)}</small><div><span>${escapeHtml(before)}${unit}</span><b>→</b><strong>${escapeHtml(after)}${unit}</strong><em class="${neutral ? "neutral" : improved ? "improved" : "regressed"}">${delta > 0 ? "+" : ""}${escapeHtml(delta)}${unit}</em></div></div>`;
+  }).join("");
+  const cases = comparison.cases.map((item) => `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.query)}</small></td><td>${item.expected_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("")}</td><td>${item.baseline_files.length ? item.baseline_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("") : '<span class="rag-empty">未召回</span>'}</td><td>${item.hybrid_files.length ? item.hybrid_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("") : '<span class="rag-empty">未召回</span>'}</td></tr>`).join("");
+  panel.classList.remove("hidden");
+  panel.innerHTML = `<div class="rag-heading"><div><h3>混合 RAG A/B 评测</h3><p>相同 ${comparison.case_count} 个标准 Case · Top ${comparison.k} · 旧关键词基线对比混合语义检索</p></div><span>基线 → 混合 RAG</span></div><div class="rag-metrics">${metrics}</div><details><summary>查看每个 Case 的召回文件</summary><div class="rag-table-wrap"><table><thead><tr><th>Case / 查询</th><th>标准答案</th><th>旧检索</th><th>混合 RAG</th></tr></thead><tbody>${cases}</tbody></table></div></details>`;
 }
 
 function renderJob(job) {
@@ -884,10 +912,11 @@ $("#evaluation-button").addEventListener("click", async () => {
   const button = $("#evaluation-button"); button.disabled = true; button.textContent = "评测中…";
   try {
     const result = await api("/api/evaluations/run", {method: "POST"});
-    notify(`Golden Cases：${result.passed}/${result.total}，得分 ${result.score}`);
+    const delta = result.retrieval_comparison?.delta?.recall_at_k;
+    notify(`Golden Cases：${result.passed}/${result.total}，得分 ${result.score}${delta == null ? "" : `；RAG Recall@K ${delta >= 0 ? "+" : ""}${delta}%`}`);
     if (currentTask) await renderObservability(currentTask.id);
   } catch (error) { notify(error.message); }
-  finally { button.disabled = false; button.textContent = "运行 Golden Cases"; }
+  finally { button.disabled = false; button.textContent = "运行 Golden + RAG 评测"; }
 });
 
 $("#task-form").addEventListener("submit", async (event) => {
