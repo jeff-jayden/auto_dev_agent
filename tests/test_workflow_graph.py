@@ -4,10 +4,35 @@ import unittest
 from pathlib import Path
 
 from domain.models import Task, TaskCheckpoint, TaskStatus
-from workflows.workflow_graph import WorkflowStateStore
+from workflows.workflow_graph import WorkflowStateStore, ensure_workflow_transition
 
 
 class WorkflowStateStoreTests(unittest.TestCase):
+    def test_allows_expected_transition(self):
+        ensure_workflow_transition(
+            TaskStatus.REQUIREMENT_ANALYSIS,
+            TaskStatus.WAITING_REQUIREMENT_APPROVAL,
+        )
+
+    def test_rejects_skipping_human_gate(self):
+        with self.assertRaisesRegex(ValueError, "Illegal task transition"):
+            ensure_workflow_transition(
+                TaskStatus.WAITING_REQUIREMENT_APPROVAL,
+                TaskStatus.CHANGE_READY,
+            )
+
+    def test_release_gate_can_return_to_changes_requested(self):
+        ensure_workflow_transition(
+            TaskStatus.WAITING_RELEASE_APPROVAL,
+            TaskStatus.CHANGES_REQUESTED,
+        )
+
+    def test_open_pull_request_can_return_to_changes_requested(self):
+        ensure_workflow_transition(
+            TaskStatus.WAITING_MERGE_APPROVAL,
+            TaskStatus.CHANGES_REQUESTED,
+        )
+
     def test_sqlite_graph_is_transition_source_and_task_status_is_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "agent.db"
