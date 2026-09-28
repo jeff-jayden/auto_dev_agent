@@ -7,6 +7,7 @@ from dev_agent.domain.models import EvaluationCaseResult, EvaluationRun, TaskSta
 from dev_agent.workflows.workflow_graph import ensure_workflow_transition
 from dev_agent.observability import TraceRecorder
 from dev_agent.repository.catalog import RepositoryCatalog
+from .retrieval import RetrievalEvaluator
 
 
 class GoldenCaseEvaluator:
@@ -29,6 +30,7 @@ class GoldenCaseEvaluator:
             id=uuid4().hex[:16], status="passed" if passed == len(results) else "failed",
             score=round(100 * passed / len(results), 1), passed=passed,
             total=len(results), cases=results,
+            retrieval_comparison=RetrievalEvaluator().run(),
         )
         return self.store.save_evaluation(run)
 

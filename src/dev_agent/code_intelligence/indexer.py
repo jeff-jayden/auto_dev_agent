@@ -280,8 +280,7 @@ class RepositoryCodeIndex:
         for token, frequency in counts.items():
             digest = hashlib.sha256(token.encode("utf-8")).digest()
             bucket = int.from_bytes(digest[:4], "big") % dimensions
-            sign = 1.0 if digest[4] % 2 == 0 else -1.0
-            vector[bucket] = vector.get(bucket, 0.0) + sign * (1 + math.log(frequency))
+            vector[bucket] = vector.get(bucket, 0.0) + 1 + math.log(frequency)
         return vector
 
     @staticmethod

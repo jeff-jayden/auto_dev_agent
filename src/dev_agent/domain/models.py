@@ -379,6 +379,31 @@ class EvaluationCaseResult(BaseModel):
     duration_ms: float
 
 
+class RetrievalMetrics(BaseModel):
+    recall_at_k: float
+    mrr: float
+    hit_at_k: float
+    irrelevant_rate: float
+    average_context_files: float
+
+
+class RetrievalCaseResult(BaseModel):
+    name: str
+    query: str
+    expected_files: list[str]
+    baseline_files: list[str]
+    hybrid_files: list[str]
+
+
+class RetrievalEvaluationComparison(BaseModel):
+    case_count: int
+    k: int
+    baseline: RetrievalMetrics
+    hybrid: RetrievalMetrics
+    delta: dict[str, float]
+    cases: list[RetrievalCaseResult] = Field(default_factory=list)
+
+
 class EvaluationRun(BaseModel):
     id: str
     status: str
@@ -386,6 +411,7 @@ class EvaluationRun(BaseModel):
     passed: int
     total: int
     cases: list[EvaluationCaseResult] = Field(default_factory=list)
+    retrieval_comparison: RetrievalEvaluationComparison | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

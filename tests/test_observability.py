@@ -5,6 +5,7 @@ from pathlib import Path
 from dev_agent.infrastructure.store import SQLiteTaskStore
 from dev_agent.observability import TraceRecorder
 from dev_agent.evaluation import GoldenCaseEvaluator
+from dev_agent.evaluation import RetrievalEvaluator
 from dev_agent.domain.models import TraceSpan
 
 
@@ -55,6 +56,19 @@ class ObservabilityTests(unittest.TestCase):
             self.assertEqual(result.score, 100.0)
             self.assertEqual(result.passed, 5)
             self.assertEqual(store.latest_evaluation().id, result.id)
+
+    def test_hybrid_rag_metrics_compare_against_same_case_baseline(self):
+        comparison = RetrievalEvaluator().run()
+
+        self.assertEqual(comparison.case_count, 6)
+        self.assertEqual(comparison.k, 3)
+        self.assertGreater(
+            comparison.hybrid.recall_at_k, comparison.baseline.recall_at_k
+        )
+        self.assertGreater(comparison.hybrid.mrr, comparison.baseline.mrr)
+        self.assertGreater(comparison.hybrid.hit_at_k, comparison.baseline.hit_at_k)
+        self.assertEqual(comparison.delta["recall_at_k"], 66.67)
+        self.assertTrue(all(case.expected_files for case in comparison.cases))
 
 
 if __name__ == "__main__":
