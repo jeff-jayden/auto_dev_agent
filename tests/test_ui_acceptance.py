@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from apps.api.main import build_orchestrator
+from tests.support import build_orchestrator
 from dev_agent.agents.mr_writer import MergeRequestWriter
 from dev_agent.domain.models import (
     DesignReference,

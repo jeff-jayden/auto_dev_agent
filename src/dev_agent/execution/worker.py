@@ -105,7 +105,7 @@ class TaskExecutionWorker:
         self._wake.set()
         return job
 
-    def resume(self, job_id: str, actor: str = "demo-user") -> ExecutionJob:
+    def resume(self, job_id: str, actor: str = "system") -> ExecutionJob:
         orchestrator = self._orchestrator_provider()
         previous = orchestrator.store.get_job(job_id)
         if previous is None:
@@ -166,7 +166,7 @@ class TaskExecutionWorker:
         self._wake.set()
         return job
 
-    def enqueue_recovery(self, task_id: str, actor: str = "demo-user") -> ExecutionJob:
+    def enqueue_recovery(self, task_id: str, actor: str = "system") -> ExecutionJob:
         orchestrator = self._orchestrator_provider()
         active_jobs = [
             item for item in orchestrator.store.list_jobs(task_id)
@@ -218,7 +218,7 @@ class TaskExecutionWorker:
         self._wake.set()
         return job
 
-    def retry_failed(self, task_id: str, actor: str = "demo-user") -> ExecutionJob:
+    def retry_failed(self, task_id: str, actor: str = "system") -> ExecutionJob:
         orchestrator = self._orchestrator_provider()
         active = orchestrator.store.get_active_job(task_id, "retry_failed")
         if active:
@@ -485,7 +485,7 @@ class TaskExecutionWorker:
             elif job.action == "user_feedback":
                 task = orchestrator.apply_user_feedback(
                     job.task_id,
-                    str(job.payload.get("actor", "demo-user")),
+                    str(job.payload.get("actor", "system")),
                     str(job.payload.get("feedback", "")),
                     job_id=job.id,
                     should_pause=lambda: self._pause_requested(orchestrator, job.id),

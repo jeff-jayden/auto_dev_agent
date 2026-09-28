@@ -35,8 +35,8 @@
               <section id="create-panel" class="panel create-panel">
                 <form id="task-form">
                   <label>目标仓库<select id="repository" required></select></label>
-                  <label>任务标题<input id="title" value="为任务增加优先级" required /></label>
-                  <label>需求描述<textarea id="requirement" rows="7" required>任务需要支持 low、medium、high 三种优先级。创建任务时可以指定优先级，不传时默认为 medium，非法值需要拒绝。</textarea></label>
+                  <label>任务标题<input id="title" placeholder="简要描述本次需求" required /></label>
+                  <label>需求描述<textarea id="requirement" rows="7" placeholder="说明预期行为、验收标准和限制条件" required></textarea></label>
                   <details class="design-inputs">
                     <summary>关联 Figma 设计稿（可选）</summary>
                     <label>Figma Frame 链接<input id="figma-url" placeholder="https://www.figma.com/design/...?...&node-id=1-2" /></label>

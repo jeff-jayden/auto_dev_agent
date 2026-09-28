@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from apps.api.main import build_orchestrator
+from tests.support import build_orchestrator
 from dev_agent.domain.models import RemotePullRequest, TaskStatus
 from dev_agent.execution import TaskExecutionWorker
 from dev_agent.repository.catalog import RepositoryCatalog
@@ -81,7 +81,7 @@ class GitHubDeliveryTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            repository = orchestrator.store.get_repository("demo")
+            repository = orchestrator.store.get_repository("test-repository")
             repository.provider = "github"
             repository.remote_url = "git@github.com:example/project.git"
             repository.github_repository = "example/project"
@@ -131,7 +131,7 @@ class GitHubDeliveryTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            repository = orchestrator.store.get_repository("demo")
+            repository = orchestrator.store.get_repository("test-repository")
             repository.provider = "github"
             repository.remote_url = "git@github.com:example/project.git"
             repository.github_repository = "example/project"

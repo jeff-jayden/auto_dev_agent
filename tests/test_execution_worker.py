@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from threading import Event
 
-from apps.api.main import build_orchestrator
+from tests.support import build_orchestrator
 from dev_agent.execution import TaskExecutionWorker
 from dev_agent.domain.models import TaskStatus
 
@@ -95,17 +95,25 @@ class ExecutionWorkerCheckpointTests(unittest.TestCase):
     def test_running_job_pauses_at_patch_checkpoint_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:
             orchestrator = build_orchestrator(Path(directory) / "runtime")
-            original_developer = orchestrator.developer
+            original_developer = orchestrator.generic_developer
             implementation_started = Event()
             allow_implementation_to_finish = Event()
 
             class BlockingDeveloper:
-                def implement(self, repository):
+                model_gateway = original_developer.model_gateway
+
+                def run(self, *args, **kwargs):
                     implementation_started.set()
                     allow_implementation_to_finish.wait(2)
-                    return original_developer.implement(repository)
+                    checkpoint_handler = kwargs.get("checkpoint_handler")
+                    if checkpoint_handler:
+                        kwargs["checkpoint_handler"] = lambda stage, next_action, payload: (
+                            False if stage == "proposal_ready"
+                            else checkpoint_handler(stage, next_action, payload)
+                        )
+                    return original_developer.run(*args, **kwargs)
 
-            orchestrator.developer = BlockingDeveloper()
+            orchestrator.generic_developer = BlockingDeveloper()
             task = orchestrator.create_task(
                 "暂停恢复回归",
                 "任务支持 low、medium、high，默认使用 medium，非法值必须拒绝。",

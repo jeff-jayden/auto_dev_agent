@@ -246,7 +246,7 @@ async function api(path, options = {}) {
 async function loadRepositories(selectedId = null) {
   const repositories = await api("/api/repositories");
   const select = $("#repository");
-  select.innerHTML = repositories.map((repo) => `<option value="${escapeHtml(repo.id)}">${escapeHtml(repo.name)} · ${repo.provider === "github" ? "GitHub" : (repo.execution_mode === "demo" ? "可执行 Demo" : "本地 Git")}</option>`).join("");
+  select.innerHTML = repositories.map((repo) => `<option value="${escapeHtml(repo.id)}">${escapeHtml(repo.name)} · ${repo.provider === "github" ? "GitHub" : "本地 Git"}</option>`).join("");
   if (selectedId) select.value = selectedId;
 }
 
@@ -961,7 +961,7 @@ $("#retry-task-button").addEventListener("click", async () => {
   const button = $("#retry-task-button");
   button.disabled = true; button.textContent = "正在分析失败上下文…";
   try {
-    const job = await api(`/api/tasks/${currentTask.id}/retry`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "分析最近失败并继续开发"})});
+    const job = await api(`/api/tasks/${currentTask.id}/retry`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "分析最近失败并继续开发"})});
     renderJob(job); notify("已进入失败续跑队列，Agent 会先诊断上次错误再继续");
     await watchJob(job);
   } catch (error) { notify(error.message); }
@@ -1031,7 +1031,7 @@ async function recoverCurrentTask() {
   try {
     const job = await api(`/api/tasks/${currentTask.id}/recovery/resume`, {
       method: "POST",
-      body: JSON.stringify({actor: "demo-user", comment: "从诊断确认的安全检查点继续"}),
+      body: JSON.stringify({actor: "web-user", comment: "从诊断确认的安全检查点继续"}),
     });
     closeRecoveryDetails();
     renderJob(job);
@@ -1056,7 +1056,7 @@ $("#recovery-drawer").addEventListener("click", (event) => { if (event.target ==
 $("#approve-button").addEventListener("click", async () => {
   const button = $("#approve-button"); button.disabled = true; button.textContent = "正在加入队列…";
   try {
-    const job = await api(`/api/tasks/${currentTask.id}/approve`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "方案清晰，同意执行"})});
+    const job = await api(`/api/tasks/${currentTask.id}/approve`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "方案清晰，同意执行"})});
     renderJob(job); notify("审批已入队，页面会实时更新执行进度");
     await watchJob(job);
   } catch (error) { notify(error.message); }
@@ -1074,7 +1074,7 @@ $("#resume-job-button").addEventListener("click", async () => {
   if (!currentJob) return;
   const button = $("#resume-job-button"); button.disabled = true; button.textContent = "正在恢复…";
   try {
-    const job = await api(`/api/jobs/${currentJob.id}/resume`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "继续上次取消的执行"})});
+    const job = await api(`/api/jobs/${currentJob.id}/resume`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "继续上次取消的执行"})});
     renderJob(job); notify("已创建续跑任务，将从最近可恢复阶段继续");
     await watchJob(job);
   } catch (error) { notify(error.message); }
@@ -1083,25 +1083,25 @@ $("#resume-job-button").addEventListener("click", async () => {
 $("#revise-button").addEventListener("click", async () => {
   const feedback = $("#revision-feedback").value.trim(); if (!feedback) return notify("请先填写修改意见");
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/revise`, {method: "POST", body: JSON.stringify({actor: "demo-user", feedback})});
+    const task = await api(`/api/tasks/${currentTask.id}/revise`, {method: "POST", body: JSON.stringify({actor: "web-user", feedback})});
     await render(task); notify("方案已根据意见重新生成");
   } catch (error) { notify(error.message); }
 });
 $("#reject-button").addEventListener("click", async () => {
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/reject`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "需要调整方案"})});
+    const task = await api(`/api/tasks/${currentTask.id}/reject`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "需要调整方案"})});
     await render(task); notify("方案已拒绝");
   } catch (error) { notify(error.message); }
 });
 $("#risk-approve-button").addEventListener("click", async () => {
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/risk/approve`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "已确认高风险范围"})});
+    const task = await api(`/api/tasks/${currentTask.id}/risk/approve`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "已确认高风险范围"})});
     await render(task); notify("高风险修改已审批，执行继续");
   } catch (error) { notify(error.message); }
 });
 $("#risk-reject-button").addEventListener("click", async () => {
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/risk/reject`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "拒绝高风险修改"})});
+    const task = await api(`/api/tasks/${currentTask.id}/risk/reject`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "拒绝高风险修改"})});
     await render(task); notify("高风险修改已拒绝");
   } catch (error) { notify(error.message); }
 });
@@ -1130,7 +1130,7 @@ $("#rerun-ui-acceptance-button").addEventListener("click", async () => {
 });
 $("#approve-review-button").addEventListener("click", async () => {
   try {
-    const task = await api("/api/tasks/" + currentTask.id + "/review/approve", {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "人工确认剩余风险可接受"})});
+    const task = await api("/api/tasks/" + currentTask.id + "/review/approve", {method: "POST", body: JSON.stringify({actor: "web-user", comment: "人工确认剩余风险可接受"})});
     await render(task); notify("Code Review 已人工批准");
   } catch (error) { notify(error.message); }
 });
@@ -1143,7 +1143,7 @@ $("#continue-development-button").addEventListener("click", async () => {
   try {
     const job = await api(`/api/tasks/${currentTask.id}/feedback`, {
       method: "POST",
-      body: JSON.stringify({actor: "demo-user", feedback}),
+      body: JSON.stringify({actor: "web-user", feedback}),
     });
     $("#code-feedback").value = "";
     renderJob(job);
@@ -1159,7 +1159,7 @@ $("#rollback-feedback-button").addEventListener("click", async () => {
   try {
     const job = await api(`/api/tasks/${currentTask.id}/feedback`, {
       method: "POST",
-      body: JSON.stringify({actor: "demo-user", feedback: "撤销上一轮修改"}),
+      body: JSON.stringify({actor: "web-user", feedback: "撤销上一轮修改"}),
     });
     renderJob(job);
     notify("撤销请求已提交，将恢复上一轮开始前的代码");
@@ -1177,14 +1177,14 @@ $("#current-diff-button").addEventListener("click", () => {
 });
 $("#reject-release-button").addEventListener("click", async () => {
   try {
-    const task = await api("/api/tasks/" + currentTask.id + "/release/reject", {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "暂不进入发布阶段"})});
+    const task = await api("/api/tasks/" + currentTask.id + "/release/reject", {method: "POST", body: JSON.stringify({actor: "web-user", comment: "暂不进入发布阶段"})});
     await render(task); notify("已拒绝进入发布阶段");
   } catch (error) { notify(error.message); }
 });
 $("#publish-pr-button").addEventListener("click", async () => {
   const button = $("#publish-pr-button"); button.disabled = true; button.textContent = "正在发布…";
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/pull-request/publish`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "确认发布 GitHub PR"})});
+    const task = await api(`/api/tasks/${currentTask.id}/pull-request/publish`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "确认发布 GitHub PR"})});
     await render(task); notify("GitHub Draft PR 已创建，等待人工合入");
   } catch (error) { notify(error.message); }
   finally { button.disabled = false; button.innerHTML = "发布 GitHub PR <b>→</b>"; }
@@ -1219,7 +1219,7 @@ $("#process-github-comments-button").addEventListener("click", async () => {
   try {
     const job = await api(`/api/tasks/${currentTask.id}/pull-request/comments/process`, {
       method: "POST",
-      body: JSON.stringify({actor: "demo-user", comment_keys: commentKeys}),
+      body: JSON.stringify({actor: "web-user", comment_keys: commentKeys}),
     });
     renderJob(job);
     notify("Review 意见已交给 Agent 处理");
@@ -1231,7 +1231,7 @@ $("#merge-pr-button").addEventListener("click", async () => {
   if (!window.confirm("确认将这个 Pull Request 合入目标分支？该操作会修改远端仓库。")) return;
   const button = $("#merge-pr-button"); button.disabled = true; button.textContent = "正在合入…";
   try {
-    const task = await api(`/api/tasks/${currentTask.id}/pull-request/merge`, {method: "POST", body: JSON.stringify({actor: "demo-user", comment: "人工确认合入"})});
+    const task = await api(`/api/tasks/${currentTask.id}/pull-request/merge`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "人工确认合入"})});
     await render(task); notify("GitHub Pull Request 已合入");
   } catch (error) { notify(error.message); }
   finally { button.disabled = false; button.innerHTML = "确认合入 <b>→</b>"; }

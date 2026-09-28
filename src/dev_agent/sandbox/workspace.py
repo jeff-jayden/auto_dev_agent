@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,25 +9,8 @@ from pathlib import Path
 class WorkspaceManager:
     """Creates task-scoped repositories and executes an allow-listed test command."""
 
-    def __init__(self, template_repository: Path, runtime_root: Path):
-        self.template_repository = template_repository.resolve()
+    def __init__(self, runtime_root: Path):
         self.runtime_root = runtime_root.resolve()
-
-    def prepare(self, task_id: str) -> Path:
-        task_root = (self.runtime_root / task_id).resolve()
-        if self.runtime_root not in task_root.parents:
-            raise ValueError("Task workspace escaped runtime root")
-        repository = task_root / "repo"
-        if task_root.exists():
-            shutil.rmtree(task_root)
-        task_root.mkdir(parents=True)
-        shutil.copytree(self.template_repository, repository, ignore=shutil.ignore_patterns(".git"))
-        self._git(repository, "init")
-        self._git(repository, "config", "user.email", "agent-demo@example.local")
-        self._git(repository, "config", "user.name", "AI Dev Agent Demo")
-        self._git(repository, "add", ".")
-        self._git(repository, "commit", "-m", "chore: baseline demo repository")
-        return repository
 
     def prepare_worktree(self, task_id: str, source_repository: Path, baseline_sha: str) -> Path:
         source_repository = source_repository.resolve()

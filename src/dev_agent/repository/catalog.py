@@ -27,7 +27,7 @@ class RepositoryCatalog:
     def refresh_remotes(self) -> None:
         for repository in self.store.list_repositories():
             path = Path(repository.local_path)
-            if repository.execution_mode == "demo" or not (path / ".git").exists():
+            if not (path / ".git").exists():
                 continue
             metadata = self._remote_metadata(path)
             repository.provider = str(metadata["provider"])
@@ -40,7 +40,6 @@ class RepositoryCatalog:
         name: str,
         local_path: str | Path,
         *,
-        execution_mode: str = "plan_only",
         require_git: bool = True,
         repository_id: str | None = None,
     ) -> Repository:
@@ -48,8 +47,6 @@ class RepositoryCatalog:
         self._validate_path(path)
         if require_git and not (path / ".git").exists():
             raise ValueError("Repository path must contain a .git directory")
-        if execution_mode not in {"demo", "plan_only"}:
-            raise ValueError("execution_mode must be demo or plan_only")
         for existing in self.store.list_repositories():
             if Path(existing.local_path).resolve() == path:
                 if require_git:
@@ -64,7 +61,7 @@ class RepositoryCatalog:
             id=repository_id or uuid4().hex[:12],
             name=name.strip(),
             local_path=str(path),
-            execution_mode=execution_mode,
+            execution_mode="plan_only",
             **remote_metadata,
         )
         return self.store.save_repository(repository)

@@ -3,7 +3,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from apps.api.main import build_orchestrator
+from tests.support import build_orchestrator
 from dev_agent.execution import TaskExecutionWorker
 from dev_agent.domain.models import ExecutionJob
 from dev_agent.workflows import RecoveryCoordinator

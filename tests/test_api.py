@@ -7,13 +7,14 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from apps.api import main
+from tests.support import build_orchestrator
 from dev_agent.domain.models import ExecutionJob, TaskStatus
 
 
 class ApiTests(unittest.TestCase):
     def test_api_flow(self):
         with tempfile.TemporaryDirectory() as directory:
-            isolated = main.build_orchestrator(Path(directory) / "runtime")
+            isolated = build_orchestrator(Path(directory) / "runtime")
             with patch.object(main, "orchestrator", isolated):
                 with TestClient(main.app) as client:
                     health = client.get("/health")
@@ -22,9 +23,9 @@ class ApiTests(unittest.TestCase):
                     self.assertIn("github_enabled", health.json())
                     repositories = client.get("/api/repositories")
                     self.assertEqual(repositories.status_code, 200)
-                    self.assertEqual(repositories.json()[0]["id"], "demo")
+                    self.assertEqual(repositories.json()[0]["id"], "test-repository")
                     repository_analysis = client.get(
-                        "/api/repositories/demo/analysis",
+                        "/api/repositories/test-repository/analysis",
                         params={"requirement": "增加 priority 优先级"},
                     )
                     self.assertEqual(repository_analysis.status_code, 200)
@@ -34,6 +35,7 @@ class ApiTests(unittest.TestCase):
                         json={
                             "title": "为任务增加优先级",
                             "requirement": "任务支持 low、medium、high，未提供时默认使用 medium。",
+                            "repository_id": "test-repository",
                         },
                     )
                     self.assertEqual(response.status_code, 201)
@@ -111,6 +113,7 @@ class ApiTests(unittest.TestCase):
                         json={
                             "title": "恢复被取消的执行",
                             "requirement": "任务支持 low、medium、high，默认使用 medium，非法值必须拒绝。",
+                            "repository_id": "test-repository",
                         },
                     ).json()
                     cancelled = isolated.store.enqueue_job(
@@ -150,7 +153,7 @@ class ApiTests(unittest.TestCase):
 
     def test_review_actions_are_blocked_while_background_job_is_active(self):
         with tempfile.TemporaryDirectory() as directory:
-            isolated = main.build_orchestrator(Path(directory) / "runtime")
+            isolated = build_orchestrator(Path(directory) / "runtime")
             with patch.object(main, "orchestrator", isolated), \
                     patch.object(main.execution_worker, "start"), \
                     patch.object(main.execution_worker, "stop"):

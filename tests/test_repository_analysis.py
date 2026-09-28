@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from apps.api.main import build_orchestrator
+from apps.api.main import build_orchestrator as build_production_orchestrator
+from tests.support import build_orchestrator
 from dev_agent.agents import GenericDeveloperAgent, LocalPlanningAgent
 from dev_agent.code_intelligence.indexer import RepositoryCodeIndex
 from dev_agent.domain.models import (
@@ -305,7 +306,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
     def test_real_repository_without_model_fails_explicitly_and_revision_is_audited(self):
         runtime = self.root / "runtime"
         with patch.dict(os.environ, {"AGENT_ALLOWED_REPOSITORY_ROOTS": str(self.root)}):
-            orchestrator = build_orchestrator(runtime)
+            orchestrator = build_production_orchestrator(runtime)
         repository = orchestrator.repository_catalog.register("Sample", self.repository)
         task = orchestrator.create_task("导出用户", "管理员可以调用 export_users 导出 CSV 用户列表。", repository.id)
         self.assertEqual(task.status, TaskStatus.WAITING_REQUIREMENT_APPROVAL)

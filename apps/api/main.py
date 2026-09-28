@@ -17,7 +17,6 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from dev_agent.agents import (
     CodeReviewerAgent,
-    DemoDeveloperAgent,
     GenericDeveloperAgent,
     LocalPlanningAgent,
     MergeRequestWriter,
@@ -37,7 +36,7 @@ from dev_agent.ui_validation import FigmaMCPClient, UIAcceptanceService
 class CreateTaskRequest(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     requirement: str = Field(min_length=10, max_length=5000)
-    repository_id: str = "demo"
+    repository_id: str = Field(min_length=1, max_length=120)
     figma_url: str = Field(default="", max_length=2000)
     preview_url: str = Field(default="", max_length=2000)
     viewport_width: int = Field(default=1440, ge=320, le=3840)
@@ -45,7 +44,7 @@ class CreateTaskRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    actor: str = Field(default="demo-user", min_length=2, max_length=80)
+    actor: str = Field(min_length=2, max_length=80)
     comment: str = Field(default="", max_length=1000)
 
 
@@ -56,12 +55,12 @@ class RepositoryRequest(BaseModel):
 
 
 class RevisionRequest(BaseModel):
-    actor: str = Field(default="demo-user", min_length=2, max_length=80)
+    actor: str = Field(min_length=2, max_length=80)
     feedback: str = Field(min_length=3, max_length=2000)
 
 
 class GitHubCommentProcessRequest(BaseModel):
-    actor: str = Field(default="demo-user", min_length=2, max_length=80)
+    actor: str = Field(min_length=2, max_length=80)
     comment_keys: list[str] = Field(min_length=1, max_length=20)
 
 
@@ -80,17 +79,7 @@ def build_orchestrator(
         github_token=os.getenv("GITHUB_TOKEN", ""),
     )
     catalog.refresh_remotes()
-    catalog.register(
-        "内置任务服务 Demo",
-        PROJECT_ROOT / "examples" / "demo_repository",
-        execution_mode="demo",
-        require_git=False,
-        repository_id="demo",
-    )
-    workspace_manager = WorkspaceManager(
-        PROJECT_ROOT / "examples" / "demo_repository",
-        runtime / "tasks",
-    )
+    workspace_manager = WorkspaceManager(runtime / "tasks")
     tracer = TraceRecorder(store)
     gateway = TracingModelGateway(model_gateway or build_model_gateway(), tracer)
     # Tests and explicitly isolated orchestrators do not outlive the process
@@ -105,7 +94,6 @@ def build_orchestrator(
     result = TaskOrchestrator(
         store,
         LocalPlanningAgent(gateway, tracer=tracer),
-        DemoDeveloperAgent(),
         workspace_manager,
         RepositoryAnalyzer(runtime / "indexes"),
         GenericDeveloperAgent(gateway, tracer=tracer),

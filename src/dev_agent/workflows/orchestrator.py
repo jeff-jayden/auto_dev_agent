@@ -11,7 +11,6 @@ from uuid import uuid4
 
 from dev_agent.agents import (
     CodeReviewerAgent,
-    DemoDeveloperAgent,
     GenericDeveloperAgent,
     LocalPlanningAgent,
     MergeRequestWriter,
@@ -40,7 +39,6 @@ class TaskOrchestrator:
         self,
         store: SQLiteTaskStore,
         planner: LocalPlanningAgent,
-        developer: DemoDeveloperAgent,
         workspace_manager: WorkspaceManager,
         repository_analyzer: RepositoryAnalyzer,
         generic_developer: GenericDeveloperAgent,
@@ -54,7 +52,6 @@ class TaskOrchestrator:
     ):
         self.store = store
         self.planner = planner
-        self.developer = developer
         self.workspace_manager = workspace_manager
         self.repository_analyzer = repository_analyzer
         self.generic_developer = generic_developer
@@ -72,13 +69,18 @@ class TaskOrchestrator:
         self,
         title: str,
         requirement: str,
-        repository_id: str = "demo",
+        repository_id: str = "",
         *,
         figma_url: str = "",
         preview_url: str = "",
         viewport_width: int = 1440,
         viewport_height: int = 900,
     ) -> Task:
+        if not repository_id:
+            repositories = self.store.list_repositories()
+            if len(repositories) != 1:
+                raise ValueError("Repository must be selected before creating a task")
+            repository_id = repositories[0].id
         if self.tracer is not None:
             with self.tracer.trace(
                 "task.create", kind="planning", metadata={"repository_id": repository_id}
@@ -107,7 +109,7 @@ class TaskOrchestrator:
         task = self.create_task(
             original.title,
             original.requirement,
-            original.repository_id or "demo",
+            original.repository_id or "",
             figma_url=original.design_reference.url if original.design_reference else "",
             preview_url=original.design_reference.preview_url if original.design_reference else "",
             viewport_width=original.design_reference.viewport_width if original.design_reference else 1440,
@@ -129,7 +131,7 @@ class TaskOrchestrator:
         original = self._require_task(task_id)
         if original.status != TaskStatus.MERGED:
             raise ValueError("Only a merged task can create a follow-up task")
-        repository = self.store.get_repository(original.repository_id or "demo")
+        repository = self.store.get_repository(original.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         if repository.provider == "github" and original.repository_analysis:
@@ -143,7 +145,7 @@ class TaskOrchestrator:
         task = self.create_task(
             f"{original.title} · 后续修改",
             followup_requirement,
-            original.repository_id or "demo",
+            original.repository_id or "",
             figma_url=original.design_reference.url if original.design_reference else "",
             preview_url=original.design_reference.preview_url if original.design_reference else "",
             viewport_width=original.design_reference.viewport_width if original.design_reference else 1440,
@@ -178,7 +180,7 @@ class TaskOrchestrator:
             raise ValueError("Only a failed task can continue from its failure context")
         if not task.workspace or not Path(task.workspace).is_dir():
             raise ValueError("The failed task workspace is no longer available")
-        repository = self.store.get_repository(task.repository_id or "demo")
+        repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         if repository.execution_mode != "plan_only":
@@ -367,7 +369,7 @@ class TaskOrchestrator:
         task = self._require_task(state["task_id"])
         if task.status != TaskStatus.WAITING_REQUIREMENT_APPROVAL:
             raise ValueError("Only a task waiting for approval can be approved")
-        repository = self.store.get_repository(task.repository_id or "demo")
+        repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         if self._replan_if_repository_changed(task, repository):
@@ -410,19 +412,12 @@ class TaskOrchestrator:
         task = state["task"]
         repository = state["repository"]
         handler = state.get("checkpoint_handler")
-        if repository.execution_mode == "plan_only":
-            task = self._run_real_development(
-                task,
-                repository,
-                checkpoint_handler=handler,
-                finalize_pipeline=False,
-            )
-        else:
-            task = self._run_demo_development(
-                task,
-                repository,
-                checkpoint_handler=handler,
-            )
+        task = self._run_real_development(
+            task,
+            repository,
+            checkpoint_handler=handler,
+            finalize_pipeline=False,
+        )
         return {"task": task}
 
     def _graph_load_review(self, state: TaskDeliveryState) -> dict:
@@ -433,7 +428,7 @@ class TaskOrchestrator:
             )
         if task.status not in {TaskStatus.CHANGE_READY, TaskStatus.CHANGES_REQUESTED}:
             raise ValueError("Task is not ready for code review")
-        repository = self.store.get_repository(task.repository_id or "demo")
+        repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         return {"task": task, "repository": repository}
@@ -450,65 +445,6 @@ class TaskOrchestrator:
             checkpoint_handler=state.get("checkpoint_handler"),
         )
         return {"task": task}
-
-    def _run_demo_development(
-        self,
-        task: Task,
-        repository_config,
-        *,
-        checkpoint_handler=None,
-    ) -> Task:
-        try:
-            repository = self.workspace_manager.prepare(task.id)
-            task.workspace = str(repository)
-            self.store.save_task(task)
-            if checkpoint_handler and checkpoint_handler(
-                "proposal_ready",
-                "apply_patch",
-                {"mode": "demo", "implementation": "deterministic"},
-            ):
-                return task
-            changed_files = self.developer.implement(repository)
-            self._event(task, "implementation_complete", "代码修改已完成", {"files": changed_files})
-            if checkpoint_handler and checkpoint_handler(
-                "patch_applied", "run_tests", {"changed_files": changed_files}
-            ):
-                return task
-
-            self._transition(task, TaskStatus.TESTING)
-            command, exit_code, output = self.workspace_manager.run_tests(repository)
-            diff = self.workspace_manager.diff(repository)
-            success = exit_code == 0
-            task.result = ExecutionResult(
-                success=success,
-                command=command,
-                exit_code=exit_code,
-                output=output,
-                diff=diff,
-                mr_title="feat: add priority to tasks",
-                mr_description=self._build_mr_description(
-                    task, command, exit_code, output
-                ),
-            )
-            if checkpoint_handler and checkpoint_handler(
-                "test_result_saved",
-                "generate_mr" if success else "stop_failed",
-                {"result": task.result.model_dump(mode="json"), "success": success},
-            ):
-                return task
-            if success:
-                self._transition(task, TaskStatus.CHANGE_READY)
-                self._event(task, "change_ready", "测试通过，Diff 和 MR 描述已生成")
-            else:
-                task.error = "Automated tests failed"
-                self._transition(task, TaskStatus.FAILED)
-                self._event(task, "tests_failed", "自动化测试失败", {"exit_code": exit_code})
-        except Exception as error:
-            task.error = str(error)
-            if task.status in {TaskStatus.DEVELOPING, TaskStatus.TESTING}:
-                self._transition(task, TaskStatus.FAILED)
-            self._event(task, "execution_failed", "执行过程中发生错误", {"error": str(error)})
-        return task
 
     def reject(self, task_id: str, actor: str, comment: str) -> Task:
         task = self._require_task(task_id)
@@ -634,7 +570,6 @@ class TaskOrchestrator:
 
             use_steps = bool(
                 approved_proposal is None
-                and repository_config.id != "demo"
                 and task.technical_plan
                 and task.technical_plan.development_steps
             )
@@ -897,7 +832,7 @@ class TaskOrchestrator:
             TaskStatus.WAITING_MERGE_APPROVAL,
         }:
             raise ValueError("Task is not waiting for user acceptance feedback")
-        repository = self.store.get_repository(task.repository_id or "demo")
+        repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         normalized_feedback = feedback.strip()
@@ -1696,7 +1631,7 @@ class TaskOrchestrator:
         self._validate_checkpoint(task, checkpoint)
         task.metadata.pop("paused_checkpoint", None)
         self.store.save_task(task)
-        repository = self.store.get_repository(task.repository_id or "demo")
+        repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
         handler = self._checkpoint_handler(task, job_id, should_pause)
@@ -1708,8 +1643,6 @@ class TaskOrchestrator:
         )
 
         if checkpoint.stage == "plan_approved":
-            if repository.execution_mode == "demo":
-                return self._resume_demo(task, repository, checkpoint, handler)
             return self._run_real_development(task, repository, checkpoint_handler=handler)
 
         if checkpoint.payload.get("development_step_index") is not None:
@@ -1724,8 +1657,6 @@ class TaskOrchestrator:
             )
 
         if checkpoint.stage in {"proposal_ready", "patch_applied"}:
-            if repository.execution_mode == "demo":
-                return self._resume_demo(task, repository, checkpoint, handler)
             if repository.execution_mode != "plan_only":
                 raise ValueError("This checkpoint is only valid for a model-driven repository")
             if task.status == TaskStatus.REVIEW_REPAIRING:
@@ -1762,10 +1693,6 @@ class TaskOrchestrator:
                 return self._finish_review_pipeline(
                     task, repository, checkpoint_handler=handler
                 )
-            if repository.execution_mode != "plan_only":
-                task.error = "Saved test result failed; demo execution cannot auto-repair"
-                self._transition(task, TaskStatus.FAILED)
-                return task
             if task.status == TaskStatus.REVIEW_REPAIRING:
                 return self._resume_review_developer_checkpoint(
                     task, repository, checkpoint, handler
@@ -1816,58 +1743,6 @@ class TaskOrchestrator:
         task.merge_request = self._write_merge_request(task)
         self._event(task, "merge_request_regenerated", "从检查点恢复 CR 修复并重新生成 MR")
         return self._review_loop(task, repository, checkpoint_handler=handler)
-
-    def _resume_demo(self, task: Task, repository_config, checkpoint, handler) -> Task:
-        try:
-            repository = Path(task.workspace) if task.workspace else self.workspace_manager.prepare(task.id)
-            if not task.workspace:
-                task.workspace = str(repository)
-                self.store.save_task(task)
-            if checkpoint.stage == "plan_approved":
-                if handler and handler(
-                    "proposal_ready",
-                    "apply_patch",
-                    {"mode": "demo", "implementation": "deterministic"},
-                ):
-                    return task
-            if checkpoint.stage in {"plan_approved", "proposal_ready"}:
-                changed_files = self.developer.implement(repository)
-                self._event(task, "implementation_complete", "代码修改已完成", {"files": changed_files})
-                if handler and handler("patch_applied", "run_tests", {"changed_files": changed_files}):
-                    return task
-            if task.status == TaskStatus.DEVELOPING:
-                self._transition(task, TaskStatus.TESTING)
-            command, exit_code, output = self.workspace_manager.run_tests(repository)
-            diff = self.workspace_manager.diff(repository)
-            task.result = ExecutionResult(
-                success=exit_code == 0,
-                command=command,
-                exit_code=exit_code,
-                output=output,
-                diff=diff,
-                mr_title="feat: add priority to tasks",
-                mr_description=self._build_mr_description(task, command, exit_code, output),
-            )
-            if handler and handler(
-                "test_result_saved",
-                "generate_mr" if exit_code == 0 else "stop_failed",
-                {"result": task.result.model_dump(mode="json"), "success": exit_code == 0},
-            ):
-                self.store.save_task(task)
-                return task
-            if exit_code != 0:
-                task.error = "Automated tests failed"
-                self._transition(task, TaskStatus.FAILED)
-                return task
-            self._transition(task, TaskStatus.CHANGE_READY)
-            self._event(task, "change_ready", "从检查点恢复后测试通过")
-            return self._finish_review_pipeline(task, repository_config, checkpoint_handler=handler)
-        except Exception as error:
-            task.error = str(error)
-            if task.status in {TaskStatus.DEVELOPING, TaskStatus.TESTING}:
-                self._transition(task, TaskStatus.FAILED)
-            self._event(task, "execution_failed", "检查点恢复失败", {"error": str(error)})
-            return task
 
     def _resume_review_repair(self, task: Task, repository, review, handler) -> Task:
         self._transition(task, TaskStatus.CHANGES_REQUESTED)
@@ -2011,7 +1886,9 @@ class TaskOrchestrator:
         task.metadata.setdefault("plan_feedback", []).append({"actor": actor, "feedback": feedback})
         enriched_requirement = f"{task.requirement}\n\n用户补充意见：{feedback}"
         if task.repository_analysis is None:
-            repository = self.store.get_repository(task.repository_id or "demo")
+            repository = self.store.get_repository(task.repository_id or "")
+            if repository is None:
+                raise ValueError("Repository not found")
             task.repository_analysis = self.repository_analyzer.analyze(Path(repository.local_path), enriched_requirement)
         task.analysis, task.technical_plan = self.planner.plan(
             task.title, enriched_requirement, task.repository_analysis,

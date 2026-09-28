@@ -219,7 +219,7 @@ class WorkflowStateStore:
             "task_id": task.id,
             "phase": task.status.value,
             "revision": 1,
-            "repository_id": task.repository_id or "demo",
+            "repository_id": task.repository_id or "",
             "baseline_sha": (
                 task.repository_analysis.head_sha if task.repository_analysis else None
             ),
