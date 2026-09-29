@@ -197,6 +197,14 @@ class WorkflowStateStore:
 
     @classmethod
     def sqlite(cls, database_path: Path) -> "WorkflowStateStore":
+        """创建使用 SQLite 持久化 LangGraph 检查点的状态存储。
+
+        Args:
+            database_path: LangGraph 状态数据库文件路径。
+
+        Returns:
+            可跨进程重启恢复的工作流状态存储。
+        """
         connection = sqlite3.connect(database_path, check_same_thread=False)
         saver = SqliteSaver(connection)
         saver.setup()
@@ -204,6 +212,7 @@ class WorkflowStateStore:
 
     @classmethod
     def memory(cls) -> "WorkflowStateStore":
+        """创建仅在当前进程内保存检查点的工作流状态存储。"""
         return cls(InMemorySaver())
 
     @staticmethod
@@ -211,6 +220,14 @@ class WorkflowStateStore:
         return {"configurable": {"thread_id": task_id}}
 
     def get(self, task_id: str) -> WorkflowState | None:
+        """读取任务当前的 LangGraph 状态。
+
+        Args:
+            task_id: 作为 LangGraph thread ID 的任务标识。
+
+        Returns:
+            当前工作流状态；尚未初始化时返回 ``None``。
+        """
         with self._lock:
             snapshot = self.graph.get_state(self._config(task_id))
         values = dict(snapshot.values) if snapshot and snapshot.values else {}
@@ -223,6 +240,16 @@ class WorkflowStateStore:
         *,
         migrated_from_legacy: bool = False,
     ) -> WorkflowState:
+        """根据领域任务和可选检查点初始化工作流状态。
+
+        Args:
+            task: 提供阶段、仓库和工作区信息的领域任务。
+            checkpoint: 可选的最近业务检查点。
+            migrated_from_legacy: 是否由旧版任务记录迁移生成。
+
+        Returns:
+            已存在或新建的工作流状态。
+        """
         existing = self.get(task.id)
         if existing is not None:
             return existing
@@ -261,6 +288,19 @@ class WorkflowStateStore:
         *,
         checkpoint: TaskCheckpoint | None = None,
     ) -> WorkflowState:
+        """校验并持久化任务的下一次状态迁移。
+
+        Args:
+            task: 当前领域任务及其投影状态。
+            target: 目标任务状态。
+            checkpoint: 可选的本次迁移检查点。
+
+        Returns:
+            迁移后的最新工作流状态。
+
+        Raises:
+            ValueError: 当前状态不允许迁移到目标状态。
+        """
         current = self.get(task.id) or self.seed(task, checkpoint)
         current_phase = TaskStatus(current["phase"])
         # Compatibility bridge for legacy code/tests that still write the
@@ -316,6 +356,14 @@ class WorkflowStateStore:
         return self.get(task.id) or {**current, **update}
 
     def pending_human_action(self, task_id: str) -> dict[str, Any] | None:
+        """读取任务当前等待的人工决策中断信息。
+
+        Args:
+            task_id: 任务唯一标识。
+
+        Returns:
+            LangGraph 中断载荷；当前不等待人工操作时返回 ``None``。
+        """
         with self._lock:
             snapshot = self.graph.get_state(self._config(task_id))
         if not snapshot or "await_human_action" not in snapshot.next:
@@ -326,6 +374,15 @@ class WorkflowStateStore:
         return dict(interrupts[0].value)
 
     def record_checkpoint(self, task: Task, checkpoint: TaskCheckpoint) -> WorkflowState:
+        """将业务检查点投影到 LangGraph 的任务状态。
+
+        Args:
+            task: 检查点所属任务。
+            checkpoint: 包含恢复阶段、Diff 哈希和下一动作的检查点。
+
+        Returns:
+            写入检查点后的最新工作流状态。
+        """
         current = self.get(task.id) or self.seed(task)
         update: WorkflowState = {
             "revision": int(current.get("revision", 0)) + 1,
@@ -348,6 +405,14 @@ class WorkflowStateStore:
         return self.get(task.id) or {**current, **update}
 
     def latest_checkpoint(self, task: Task) -> TaskCheckpoint | None:
+        """从 LangGraph 状态还原任务最近的业务检查点。
+
+        Args:
+            task: 需要查询检查点的任务。
+
+        Returns:
+            最新检查点；尚未记录时返回 ``None``。
+        """
         state = self.get(task.id)
         if not state or not state.get("saved_checkpoint_id") or not state.get("resume_stage"):
             return None
@@ -367,6 +432,15 @@ class WorkflowStateStore:
         )
 
     def migrate(self, tasks: list[Task], checkpoint_loader) -> int:
+        """把尚未进入 LangGraph 的旧任务批量迁移到状态存储。
+
+        Args:
+            tasks: 待检查和迁移的历史任务列表。
+            checkpoint_loader: 根据任务 ID 读取旧版最新检查点的函数。
+
+        Returns:
+            本次实际迁移的任务数量。
+        """
         migrated = 0
         for task in tasks:
             if self.get(task.id) is not None:
@@ -380,6 +454,7 @@ class WorkflowStateStore:
         return migrated
 
     def close(self) -> None:
+        """关闭状态存储持有的 SQLite 连接；内存实现无需处理。"""
         if self._connection is not None:
             self._connection.close()
 
@@ -467,6 +542,20 @@ class TaskDeliveryGraph:
         viewport_width: int = 1440,
         viewport_height: int = 900,
     ) -> Task:
+        """调用任务交付图创建并规划一个新任务。
+
+        Args:
+            title: 任务标题。
+            requirement: 完整需求描述。
+            repository_id: 目标仓库 ID。
+            figma_url: 可选 Figma 设计地址。
+            preview_url: 可选实现页面预览地址。
+            viewport_width: UI 验收视口宽度，单位为像素。
+            viewport_height: UI 验收视口高度，单位为像素。
+
+        Returns:
+            图执行后生成的任务。
+        """
         result = self.graph.invoke({
             "action": "create",
             "title": title,
@@ -488,6 +577,18 @@ class TaskDeliveryGraph:
         checkpoint_job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """调用任务交付图批准方案并推进开发流程。
+
+        Args:
+            task_id: 待批准任务 ID。
+            actor: 审批人标识。
+            comment: 可选审批说明。
+            checkpoint_job_id: 可选后台 Job ID，用于关联检查点。
+            should_pause: 可选暂停判定函数。
+
+        Returns:
+            图执行后的最新任务。
+        """
         result = self.graph.invoke({
             "action": "approve",
             "task_id": task_id,
@@ -505,6 +606,16 @@ class TaskDeliveryGraph:
         checkpoint_job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """调用任务交付图生成 MR 草稿并执行代码审查。
+
+        Args:
+            task_id: 可进入 Code Review 的任务 ID。
+            checkpoint_job_id: 可选后台 Job ID，用于关联检查点。
+            should_pause: 可选暂停判定函数。
+
+        Returns:
+            图执行后的最新任务。
+        """
         result = self.graph.invoke({
             "action": "review",
             "task_id": task_id,
