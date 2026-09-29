@@ -89,9 +89,9 @@ flowchart TB
 
     web([👤 Web 工作台]) --> api[🌐 FastAPI]
     api --> worker[⚙️ Job Worker]
-    worker --> graph[🔄 LangGraph 工作流]
-    graph --> agents[🧠 Plan / Developer / Reviewer]
-    graph --> database[(💾 SQLite 与 Checkpointer)]
+    worker --> workflow_graph[🔄 LangGraph 工作流]
+    workflow_graph --> agents[🧠 Plan / Developer / Reviewer]
+    workflow_graph --> database[(💾 SQLite 与 Checkpointer)]
     agents --> workspace[🔧 Git Worktree 与工具策略]
     agents --> integrations[🔌 LLM / GitHub / Figma]
     api --> database
@@ -101,7 +101,7 @@ flowchart TB
     classDef data fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class web,api interface
-    class worker,graph,agents engine
+    class worker,workflow_graph,agents engine
     class database,workspace data
 ```
 
