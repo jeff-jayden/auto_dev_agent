@@ -12,8 +12,12 @@ let observabilityTaskId = null;
 let folderPickerState = null;
 let traceTimelineLinks = new Map();
 let observabilityTimelineEvents = [];
+let selectedTraceId = null;
+let renderedTraceSignature = "";
 let renderedTimelineTaskId = null;
 let renderedTimelineLatestEvent = null;
+let renderedTimelineSignature = "";
+let renderedTraceListSignature = "";
 let currentRecovery = null;
 let developmentDiffState = {open: false, taskId: null};
 let currentDiffFiles = {taskId: null, revision: null, files: []};
@@ -295,7 +299,7 @@ function updateNavigationAvailability() {
   });
 }
 
-function setView(view) {
+function setView(view, {refreshData = true} = {}) {
   if (view !== "create" && view !== "requirement" && !currentTask) return;
   activeView = view;
   const label = viewLabels[view] || viewLabels.requirement;
@@ -313,12 +317,17 @@ function setView(view) {
   });
   if (currentTask) renderReviewGate(currentTask);
   updateNavigationAvailability();
-  if (view === "observability" && currentTask) {
+  if (refreshData && view === "observability" && currentTask) {
     observabilityTaskId = currentTask.id;
     renderObservability(currentTask.id).catch((error) => {
       observabilityTaskId = null;
       notify(error.message);
     });
+  }
+  if (refreshData && view === "review" && currentTask?.result) {
+    loadCurrentDiffFiles(currentTask)
+      .then((files) => renderMonacoDiff(files, "#review-diff"))
+      .catch((error) => notify(`代码对比加载失败：${error.message}`));
   }
 }
 function list(element, items = []) { element.innerHTML = items.map((item) => `<li>${escapeHtml(item)}</li>`).join(""); }
@@ -507,6 +516,10 @@ function showNewTask() {
 
 async function selectTask(taskId, requestedView = null) {
   watchGeneration += 1;
+  if (currentTask?.id !== taskId) {
+    selectedTraceId = null;
+    renderedTraceSignature = "";
+  }
   currentJob = null;
   $("#job-panel").classList.add("hidden");
   $("#replay-result").classList.add("hidden");
@@ -586,8 +599,22 @@ function focusSpanTimeline(steps, spanId = null) {
 }
 
 async function showTrace(traceId, focusEventStep = null) {
+  const spanList = $("#span-list");
+  const previousScrollTop = spanList.scrollTop;
+  const selectionChanged = selectedTraceId !== traceId;
   const detail = await api(`/api/traces/${traceId}`);
+  const detailSignature = JSON.stringify([
+    traceId,
+    renderedTimelineLatestEvent,
+    (detail.spans || []).map((span) => [
+      span.id, span.status, span.duration_ms, span.ended_at,
+      span.error, span.output_summary, span.input_summary, span.attributes,
+    ]),
+  ]);
+  selectedTraceId = traceId;
   document.querySelectorAll(".trace-item").forEach((item) => item.classList.toggle("active", item.dataset.traceId === traceId));
+  if (focusEventStep === null && !selectionChanged && detailSignature === renderedTraceSignature) return;
+  renderedTraceSignature = detailSignature;
   const kindLabels = {agent: "AGENT", llm: "LLM", tool: "TOOL", workflow: "FLOW", execution: "EXEC"};
   const indexed = (detail.spans || []).map((span, originalIndex) => ({span, originalIndex}));
   indexed.sort((left, right) => new Date(left.span.started_at) - new Date(right.span.started_at) || left.originalIndex - right.originalIndex);
@@ -621,7 +648,8 @@ async function showTrace(traceId, focusEventStep = null) {
   }
   document.querySelectorAll(".timeline-item").forEach((item) => item.classList.toggle("trace-active", item.dataset.traceId === traceId));
   const firstLinkedEvent = document.querySelector(`.timeline-item[data-trace-id="${CSS.escape(traceId)}"]`);
-  if (firstLinkedEvent) centerTimelineItem(firstLinkedEvent);
+  if (selectionChanged && firstLinkedEvent) centerTimelineItem(firstLinkedEvent);
+  if (!selectionChanged) spanList.scrollTop = Math.min(previousScrollTop, Math.max(0, spanList.scrollHeight - spanList.clientHeight));
 }
 
 function correlateTimelineEvents(traces, events) {
@@ -654,10 +682,16 @@ function renderTimeline(events, links = new Map(), taskId = currentTask?.id || n
     ? String(events[events.length - 1].id ?? `${events.length}:${events[events.length - 1].created_at}`)
     : null;
   const shouldFollowLatest = taskId !== renderedTimelineTaskId || latestEvent !== renderedTimelineLatestEvent;
-  timeline.innerHTML = events.map((event, index) => {
+  const timelineSignature = JSON.stringify([
+    taskId,
+    events.map((event, index) => [event.id, event.message, event.created_at, links.get(index) || null]),
+  ]);
+  if (timelineSignature === renderedTimelineSignature) return;
+  const timelineHtml = events.map((event, index) => {
     const traceId = links.get(index);
     return `<button type="button" class="timeline-item ${traceId ? "trace-linked" : ""}" data-step="${index + 1}" ${traceId ? `data-trace-id="${escapeHtml(traceId)}"` : ""}><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(event.message)}</b>${traceId ? '<em>属于执行记录</em>' : ""}<small>${new Date(event.created_at).toLocaleString()}</small></div></button>`;
   }).join("");
+  timeline.innerHTML = timelineHtml;
   if (shouldFollowLatest) {
     timeline.scrollLeft = timeline.scrollWidth;
   } else {
@@ -665,10 +699,13 @@ function renderTimeline(events, links = new Map(), taskId = currentTask?.id || n
   }
   renderedTimelineTaskId = taskId;
   renderedTimelineLatestEvent = latestEvent;
+  renderedTimelineSignature = timelineSignature;
   document.querySelectorAll(".timeline-item[data-trace-id]").forEach((item) => item.addEventListener("click", () => showTrace(item.dataset.traceId, Number(item.dataset.step)).catch((error) => notify(error.message))));
 }
 
 async function renderObservability(taskId) {
+  const traceList = $("#trace-list");
+  const previousTraceScrollTop = traceList.scrollTop;
   const [metrics, traces, checkpoints, events] = await Promise.all([
     api("/api/metrics"), api(`/api/tasks/${taskId}/traces`), api(`/api/tasks/${taskId}/checkpoints`), api(`/api/tasks/${taskId}/events`),
   ]);
@@ -678,22 +715,34 @@ async function renderObservability(taskId) {
     ["平均耗时", `${metrics.average_duration_ms} ms`], ["LLM 调用", metrics.llm_calls],
     ["工具调用", metrics.tool_calls], ["Golden Score", evaluation ? `${evaluation.score}%` : "未运行"],
   ];
-  $("#metric-cards").innerHTML = cards.map(([label, value]) => `<div class="metric-card"><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></div>`).join("");
+  const metricCardsHtml = cards.map(([label, value]) => `<div class="metric-card"><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></div>`).join("");
+  if ($("#metric-cards").innerHTML !== metricCardsHtml) $("#metric-cards").innerHTML = metricCardsHtml;
   renderRagComparison(evaluation?.retrieval_comparison);
   const correlation = correlateTimelineEvents(traces, events);
   traceTimelineLinks = correlation.links;
   observabilityTimelineEvents = events;
   renderTimeline(events, traceTimelineLinks, taskId);
-  $("#trace-list").innerHTML = traces.map((trace) => {
+  const traceListHtml = traces.map((trace) => {
     const steps = correlation.ranges.get(trace.id) || [];
     const range = steps.length ? (steps.length === 1 ? `步骤 ${String(steps[0]).padStart(2, "0")}` : `步骤 ${String(steps[0]).padStart(2, "0")}–${String(steps[steps.length - 1]).padStart(2, "0")}`) : "暂无关联步骤";
     return `<button type="button" class="trace-item" data-trace-id="${escapeHtml(trace.id)}"><span><b>${escapeHtml(trace.name)}</b><br><small>${escapeHtml(trace.kind)} · ${new Date(trace.started_at).toLocaleString()}</small><em class="trace-step-range">${escapeHtml(range)}</em></span><small>${trace.duration_ms ?? 0} ms</small></button>`;
   }).join("") || "<p>尚无执行 Trace。</p>";
-  document.querySelectorAll(".trace-item").forEach((item) => item.addEventListener("click", () => showTrace(item.dataset.traceId).catch((error) => notify(error.message))));
+  const traceListSignature = JSON.stringify([taskId, traceListHtml]);
+  if (traceListSignature !== renderedTraceListSignature) {
+    traceList.innerHTML = traceListHtml;
+    renderedTraceListSignature = traceListSignature;
+    traceList.scrollTop = Math.min(previousTraceScrollTop, Math.max(0, traceList.scrollHeight - traceList.clientHeight));
+    document.querySelectorAll(".trace-item").forEach((item) => item.addEventListener("click", () => showTrace(item.dataset.traceId).catch((error) => notify(error.message))));
+  }
   $("#replay-button").disabled = checkpoints.length === 0;
   $("#replay-button").dataset.checkpointId = checkpoints.length ? checkpoints[checkpoints.length - 1].id : "";
-  if (traces.length) await showTrace(traces[0].id);
-  else $("#span-list").innerHTML = "<p>选择产生过 Trace 的任务后查看调用链。</p>";
+  const traceToShow = traces.find((trace) => trace.id === selectedTraceId) || traces[0];
+  if (traceToShow) await showTrace(traceToShow.id);
+  else {
+    selectedTraceId = null;
+    renderedTraceSignature = "";
+    $("#span-list").innerHTML = "<p>选择产生过 Trace 的任务后查看调用链。</p>";
+  }
 }
 
 function renderRagComparison(comparison) {
@@ -861,6 +910,26 @@ function renderJob(job) {
   $("#resume-job-button").classList.toggle("hidden", !["cancelled", "paused"].includes(job.status) || !resumableTask);
 }
 
+async function renderLiveTask(task) {
+  if (activeView !== "observability") {
+    await render(task);
+    return;
+  }
+  currentTask = task;
+  localStorage.setItem("ai-dev-agent-current-task", task.id);
+  $("#task-id").textContent = `TASK / ${task.id}`;
+  $("#task-title").textContent = task.title;
+  $("#task-requirement").textContent = task.requirement;
+  $("#status-badge").textContent = statusLabels[task.status] || task.status;
+  $("#status-badge").className = `status ${task.status}`;
+  renderReviewGate(task);
+  const knownIndex = knownTasks.findIndex((item) => item.id === task.id);
+  if (knownIndex >= 0) knownTasks[knownIndex] = task;
+  else knownTasks.unshift(task);
+  renderTaskList();
+  await renderObservability(task.id);
+}
+
 async function watchJob(job) {
   const generation = ++watchGeneration;
   if (!knownTasks.some((task) => task.id === job.task_id)) {
@@ -877,20 +946,36 @@ async function watchJob(job) {
   const lastEventId = existingEvents.length ? existingEvents[existingEvents.length - 1].id : 0;
   const stream = new EventSource(`/api/tasks/${job.task_id}/stream?after=${lastEventId}`);
   let refreshPending = false;
+  let refreshQueued = false;
+  let refreshTimer = null;
   const refreshWatchedTask = async () => {
-    if (refreshPending || generation !== watchGeneration) return;
+    if (generation !== watchGeneration) return;
+    if (refreshPending) {
+      refreshQueued = true;
+      return;
+    }
     refreshPending = true;
+    refreshQueued = false;
     try {
       const task = await api(`/api/tasks/${job.task_id}`);
-      await render(task);
+      await renderLiveTask(task);
     } catch (error) {
       notify(error.message);
     } finally {
       refreshPending = false;
+      if (refreshQueued && generation === watchGeneration) scheduleRefresh(350);
     }
   };
-  stream.addEventListener("task_event", refreshWatchedTask);
-  let nextTaskRefreshAt = Date.now() + 1200;
+  const scheduleRefresh = (delay = 350) => {
+    refreshQueued = true;
+    if (refreshTimer || refreshPending || generation !== watchGeneration) return;
+    refreshTimer = setTimeout(async () => {
+      refreshTimer = null;
+      await refreshWatchedTask();
+    }, delay);
+  };
+  stream.addEventListener("task_event", () => scheduleRefresh());
+  let nextTaskRefreshAt = Date.now() + 4000;
   try {
     while (generation === watchGeneration) {
       const latest = await api(`/api/jobs/${job.id}`);
@@ -898,7 +983,7 @@ async function watchJob(job) {
       if (terminalJobStatuses.has(latest.status)) {
         const task = await api(`/api/tasks/${job.task_id}`);
         await refreshTaskList();
-        await render(task);
+        await renderLiveTask(task);
         if (latest.status === "succeeded" && task.status === "waiting_requirement_approval" && task.metadata.baseline_refresh_count) notify("仓库基线已变化，索引和技术方案已更新，请重新审批");
         else if (latest.status === "succeeded") notify("后台开发、MR 和 Code Review 已完成");
         if (latest.status === "failed") notify(`后台执行失败：${latest.error || "未知错误"}`);
@@ -906,19 +991,26 @@ async function watchJob(job) {
         break;
       }
       if (Date.now() >= nextTaskRefreshAt) {
-        await refreshWatchedTask();
-        nextTaskRefreshAt = Date.now() + 1200;
+        scheduleRefresh(0);
+        nextTaskRefreshAt = Date.now() + 4000;
       }
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   } finally {
+    if (refreshTimer) clearTimeout(refreshTimer);
     stream.close();
   }
 }
 
 async function render(task) {
   const switchedTask = Boolean(currentTask && currentTask.id !== task.id);
-  if (switchedTask) closeDevelopmentDiff();
+  if (switchedTask) {
+    selectedTraceId = null;
+    renderedTraceSignature = "";
+    renderedTimelineSignature = "";
+    renderedTraceListSignature = "";
+    closeDevelopmentDiff();
+  }
   currentTask = task;
   currentRecovery = null;
   $("#recovery-panel").classList.add("hidden");
@@ -1021,7 +1113,7 @@ async function render(task) {
     if (developmentDiffState.open && developmentDiffState.taskId === task.id) {
       await renderMonacoDiff(diffFiles);
     }
-    await renderMonacoDiff(diffFiles, "#review-diff");
+    if (activeView === "review") await renderMonacoDiff(diffFiles, "#review-diff");
   }
   if (!hasResult) {
     disposeMonacoDiffView("#diff");
@@ -1129,7 +1221,7 @@ async function render(task) {
   if (knownIndex >= 0) knownTasks[knownIndex] = task;
   else knownTasks.unshift(task);
   renderTaskList();
-  setView(activeView === "create" ? defaultViewForTask(task) : activeView);
+  setView(activeView === "create" ? defaultViewForTask(task) : activeView, {refreshData: false});
 }
 
 $("#replay-button").addEventListener("click", async () => {
