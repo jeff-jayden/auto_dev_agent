@@ -14,6 +14,7 @@ let observabilityTimelineEvents = [];
 let renderedTimelineTaskId = null;
 let renderedTimelineLatestEvent = null;
 let currentRecovery = null;
+let developmentDiffState = {open: false, taskId: null, mode: "cumulative", key: null};
 
 const chatBottomThreshold = 48;
 
@@ -173,6 +174,34 @@ function renderAttemptToolCalls(attempt) {
 
 function cumulativeDiff(task) {
   return task?.metadata?.workspace_diff || task?.result?.diff || "";
+}
+
+function cumulativeDiffLabel(task) {
+  return task?.metadata?.workspace_diff && task?.status === "changes_requested"
+    ? "当前工作区累计修改（包含尚未通过的修改）"
+    : "当前任务累计修改";
+}
+
+function openDevelopmentDiff(diff, label, mode = "cumulative", key = null) {
+  if (!currentTask) return;
+  renderDiff(diff);
+  $("#diff-scope-label").textContent = label;
+  $("#current-diff-button").classList.toggle("hidden", mode === "cumulative");
+  developmentDiffState = {open: true, taskId: currentTask.id, mode, key};
+  $("#development-view").classList.add("diff-open");
+  $("#development-diff-drawer").setAttribute("aria-hidden", "false");
+  $("#diff").scrollTo({top: 0, behavior: "smooth"});
+}
+
+function openCurrentDevelopmentDiff() {
+  if (!currentTask) return;
+  openDevelopmentDiff(cumulativeDiff(currentTask), cumulativeDiffLabel(currentTask));
+}
+
+function closeDevelopmentDiff() {
+  developmentDiffState = {open: false, taskId: currentTask?.id || null, mode: "cumulative", key: null};
+  $("#development-view").classList.remove("diff-open");
+  $("#development-diff-drawer").setAttribute("aria-hidden", "true");
 }
 
 const viewLabels = {
@@ -693,6 +722,8 @@ async function watchJob(job) {
 }
 
 async function render(task) {
+  const switchedTask = Boolean(currentTask && currentTask.id !== task.id);
+  if (switchedTask) closeDevelopmentDiff();
   currentTask = task;
   currentRecovery = null;
   $("#recovery-panel").classList.add("hidden");
@@ -731,10 +762,12 @@ async function render(task) {
   document.querySelectorAll(".step-diff-button").forEach((button) => button.addEventListener("click", () => {
     const execution = stepExecutions.get(button.dataset.stepId);
     if (!execution?.diff) return;
-    renderDiff(execution.diff);
-    $("#diff-scope-label").textContent = `${execution.title} 完成时的累计 Diff`;
-    $("#current-diff-button").classList.remove("hidden");
-    $("#diff").scrollTo({top: 0, behavior: "smooth"});
+    openDevelopmentDiff(
+      execution.diff,
+      `${execution.title} 完成时的累计 Diff`,
+      "step",
+      button.dataset.stepId,
+    );
   }));
 
   const analysis = task.repository_analysis;
@@ -781,16 +814,17 @@ async function render(task) {
   renderTimeline(events, new Map(), task.id);
   $("#approval-panel").classList.toggle("hidden", !["waiting_requirement_approval", "waiting_requirement_input"].includes(task.status));
   const hasResult = Boolean(task.result); $("#result-panel").classList.toggle("hidden", !hasResult);
+  $("#open-current-diff-button").disabled = !cumulativeDiff(task);
   if (hasResult) {
     $("#test-output").textContent = task.result.output; $("#mr-title").textContent = task.result.mr_title;
     $("#mr-description").textContent = task.merge_request?.description || task.result.mr_description;
     $("#mr-title").textContent = task.merge_request?.title || task.result.mr_title;
-    renderDiff(cumulativeDiff(task));
+    if (!developmentDiffState.open || developmentDiffState.taskId !== task.id || developmentDiffState.mode === "cumulative") {
+      renderDiff(cumulativeDiff(task));
+      $("#diff-scope-label").textContent = cumulativeDiffLabel(task);
+      $("#current-diff-button").classList.add("hidden");
+    }
     renderDiff(cumulativeDiff(task), "#review-diff");
-    $("#diff-scope-label").textContent = task.metadata.workspace_diff && task.status === "changes_requested"
-      ? "当前工作区累计修改（包含尚未通过的修改）"
-      : "当前任务累计修改";
-    $("#current-diff-button").classList.add("hidden");
   }
   if (!hasResult) {
     renderDiff("", "#diff");
@@ -867,10 +901,7 @@ async function render(task) {
     const index = Number(button.dataset.feedbackIndex);
     const round = feedbackRounds[index];
     if (!round?.diff) return;
-    renderDiff(round.diff);
-    $("#diff-scope-label").textContent = `第 ${index + 1} 轮对话产生的修改`;
-    $("#current-diff-button").classList.remove("hidden");
-    $("#diff").scrollTo({top: 0, behavior: "smooth"});
+    openDevelopmentDiff(round.diff, `第 ${index + 1} 轮对话产生的修改`, "feedback", index);
   }));
   $("#release-gate").classList.toggle("hidden", task.status !== "waiting_release_approval");
   const uiBlocking = (task.ui_acceptance?.checks || []).some((check) => check.blocking && check.status === "failed");
@@ -1188,13 +1219,10 @@ $("#rollback-feedback-button").addEventListener("click", async () => {
   finally { button.textContent = "撤销上一轮"; }
 });
 $("#current-diff-button").addEventListener("click", () => {
-  if (!currentTask?.result) return;
-  renderDiff(cumulativeDiff(currentTask));
-  $("#diff-scope-label").textContent = currentTask.metadata.workspace_diff && currentTask.status === "changes_requested"
-    ? "当前工作区累计修改（包含尚未通过的修改）"
-    : "当前任务累计修改";
-  $("#current-diff-button").classList.add("hidden");
+  openCurrentDevelopmentDiff();
 });
+$("#open-current-diff-button").addEventListener("click", openCurrentDevelopmentDiff);
+$("#close-diff-button").addEventListener("click", closeDevelopmentDiff);
 $("#reject-release-button").addEventListener("click", async () => {
   try {
     const task = await api("/api/tasks/" + currentTask.id + "/release/reject", {method: "POST", body: JSON.stringify({actor: "web-user", comment: "暂不进入发布阶段"})});
