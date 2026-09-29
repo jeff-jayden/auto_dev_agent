@@ -97,6 +97,23 @@ class TaskOrchestrator:
         viewport_width: int = 1440,
         viewport_height: int = 900,
     ) -> Task:
+        """创建任务并完成仓库分析、需求分析和技术方案生成。
+
+        Args:
+            title: 用户可识别的任务标题。
+            requirement: 需要 Agent 完成的完整需求描述。
+            repository_id: 目标仓库 ID；未提供且系统仅有一个仓库时自动选择。
+            figma_url: 可选的 Figma 文件或节点地址，用于固定 UI 设计基线。
+            preview_url: 可选的实现页面地址，用于后续 UI 验收。
+            viewport_width: UI 验收视口宽度，单位为像素。
+            viewport_height: UI 验收视口高度，单位为像素。
+
+        Returns:
+            已生成需求分析和技术方案、等待人工审批的任务。
+
+        Raises:
+            ValueError: 无法唯一确定目标仓库，或仓库、设计基线分析失败。
+        """
         if not repository_id:
             repositories = self.store.list_repositories()
             if len(repositories) != 1:
@@ -121,6 +138,17 @@ class TaskOrchestrator:
         )
 
     def rerun_task(self, task_id: str) -> Task:
+        """基于已结束任务的原始需求创建一次全新的规划执行。
+
+        Args:
+            task_id: 已合入、失败或被拒绝的源任务 ID。
+
+        Returns:
+            使用仓库最新基线重新规划的新任务。
+
+        Raises:
+            ValueError: 源任务状态不允许重跑。
+        """
         original = self._require_task(task_id)
         rerunnable = {TaskStatus.MERGED, TaskStatus.FAILED, TaskStatus.REJECTED}
         if original.status not in rerunnable:
@@ -149,6 +177,19 @@ class TaskOrchestrator:
     def create_followup_task(
         self, task_id: str, actor: str, feedback: str
     ) -> Task:
+        """针对已合入任务创建继承上下文的后续修改任务。
+
+        Args:
+            task_id: 已合入的源任务 ID。
+            actor: 提出后续修改的用户标识。
+            feedback: 基于线上最新代码继续修改的意见。
+
+        Returns:
+            使用默认分支最新基线规划的后续任务。
+
+        Raises:
+            ValueError: 源任务未合入或关联仓库不存在。
+        """
         original = self._require_task(task_id)
         if original.status != TaskStatus.MERGED:
             raise ValueError("Only a merged task can create a follow-up task")
@@ -196,6 +237,19 @@ class TaskOrchestrator:
         job_id: str,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """从失败上下文继续同一任务，并让 Agent 针对失败原因重新开发。
+
+        Args:
+            task_id: 处于失败状态的任务 ID。
+            job_id: 承载本次续跑的后台 Job ID，用于保存检查点。
+            should_pause: 可选暂停判定函数，在安全检查点决定是否停止。
+
+        Returns:
+            续跑后的最新任务状态。
+
+        Raises:
+            ValueError: 任务状态、工作区、仓库模式或技术方案不支持失败续跑。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.FAILED:
             raise ValueError("Only a failed task can continue from its failure context")
@@ -378,6 +432,18 @@ class TaskOrchestrator:
         checkpoint_job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """批准技术方案并启动开发交付图。
+
+        Args:
+            task_id: 等待需求审批的任务 ID。
+            actor: 执行审批的用户标识。
+            comment: 可选的审批说明。
+            checkpoint_job_id: 可选后台 Job ID，用于将开发阶段检查点关联到本次执行。
+            should_pause: 可选暂停判定函数，在安全检查点决定是否停止。
+
+        Returns:
+            开发、测试和审查推进后的最新任务。
+        """
         return self.delivery_graph.approve(
             task_id,
             actor,
@@ -476,6 +542,16 @@ class TaskOrchestrator:
         return {"task": task}
 
     def reject(self, task_id: str, actor: str, comment: str) -> Task:
+        """拒绝当前技术方案并终止本次任务。
+
+        Args:
+            task_id: 等待需求审批的任务 ID。
+            actor: 执行拒绝操作的用户标识。
+            comment: 拒绝原因或修改建议。
+
+        Returns:
+            状态已变为 ``rejected`` 的任务。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.WAITING_REQUIREMENT_APPROVAL:
             raise ValueError("Only a task waiting for approval can be rejected")
@@ -485,6 +561,16 @@ class TaskOrchestrator:
         return task
 
     def approve_risk(self, task_id: str, actor: str, comment: str = "") -> Task:
+        """批准 Developer Agent 提出的高风险代码修改方案并继续执行。
+
+        Args:
+            task_id: 等待风险审批的任务 ID。
+            actor: 批准高风险修改的用户标识。
+            comment: 可选的审批说明。
+
+        Returns:
+            应用高风险方案并继续开发或 CR 修复后的任务。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.WAITING_RISK_APPROVAL or task.pending_proposal is None:
             raise ValueError("Task is not waiting for a risk approval")
@@ -544,6 +630,16 @@ class TaskOrchestrator:
         return self._run_real_development(task, repository, proposal, high_risk_approved=True)
 
     def reject_risk(self, task_id: str, actor: str, comment: str) -> Task:
+        """拒绝待审批的高风险代码修改方案。
+
+        Args:
+            task_id: 等待风险审批的任务 ID。
+            actor: 执行拒绝操作的用户标识。
+            comment: 拒绝原因。
+
+        Returns:
+            已清除待处理方案并标记为拒绝的任务。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.WAITING_RISK_APPROVAL:
             raise ValueError("Task is not waiting for a risk approval")
@@ -850,6 +946,16 @@ class TaskOrchestrator:
         job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """对当前代码重新生成 MR 草稿并执行 Code Review 流程。
+
+        Args:
+            task_id: 已具备代码改动、可进入审查的任务 ID。
+            job_id: 可选后台审查 Job ID，用于保存检查点。
+            should_pause: 可选暂停判定函数，在安全检查点决定是否停止。
+
+        Returns:
+            审查通过、要求修改或暂停后的最新任务。
+        """
         return self.delivery_graph.review(
             task_id,
             checkpoint_job_id=job_id,
@@ -864,6 +970,21 @@ class TaskOrchestrator:
         job_id: str | None = None,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """在同一工作区中应用用户验收意见，并重新测试和审查累计修改。
+
+        Args:
+            task_id: 等待用户验收或存在 CR 修改要求的任务 ID。
+            actor: 提交反馈的用户标识。
+            feedback: 本轮具体修改意见；也可以是受支持的撤销指令。
+            job_id: 可选后台 Job ID，用于保存本轮修改检查点。
+            should_pause: 可选暂停判定函数，在安全检查点决定是否停止。
+
+        Returns:
+            本轮反馈处理后的最新任务。
+
+        Raises:
+            ValueError: 当前状态不接受反馈、反馈为空或 Developer Agent 不可用。
+        """
         task = self._require_task(task_id)
         if task.status not in {
             TaskStatus.WAITING_RELEASE_APPROVAL,
@@ -1061,6 +1182,16 @@ class TaskOrchestrator:
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def approve_review(self, task_id: str, actor: str, comment: str = "") -> Task:
+        """人工覆盖阻塞性 Code Review 结论并进入发布审批。
+
+        Args:
+            task_id: 状态为 ``changes_requested`` 的任务 ID。
+            actor: 执行人工批准的用户标识。
+            comment: 可选的覆盖原因。
+
+        Returns:
+            等待发布审批的任务。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.CHANGES_REQUESTED:
             raise ValueError("Only a task with requested changes can be manually approved")
@@ -1072,6 +1203,16 @@ class TaskOrchestrator:
         return task
 
     def reject_release(self, task_id: str, actor: str, comment: str = "") -> Task:
+        """在发布或合入审批阶段拒绝任务。
+
+        Args:
+            task_id: 等待发布或合入审批的任务 ID。
+            actor: 执行拒绝操作的用户标识。
+            comment: 可选的拒绝原因。
+
+        Returns:
+            状态已变为 ``rejected`` 的任务。
+        """
         task = self._require_task(task_id)
         if task.status not in {TaskStatus.WAITING_RELEASE_APPROVAL, TaskStatus.WAITING_MERGE_APPROVAL}:
             raise ValueError("Task is not waiting for release or merge approval")
@@ -1081,6 +1222,18 @@ class TaskOrchestrator:
         return task
 
     def publish_pull_request(self, task_id: str, actor: str) -> Task:
+        """将已验收修改推送到 GitHub 并创建或更新 Pull Request。
+
+        Args:
+            task_id: 已通过测试、CR 和 UI 验收，等待发布的任务 ID。
+            actor: 确认发布的用户标识。
+
+        Returns:
+            已关联远程 PR、等待人工合入的任务。
+
+        Raises:
+            ValueError: 任务未就绪、UI 验收阻塞、GitHub 未配置或发布失败。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.WAITING_RELEASE_APPROVAL:
             raise ValueError("Task is not ready to publish a GitHub pull request")
@@ -1122,6 +1275,14 @@ class TaskOrchestrator:
             raise ValueError(str(error)) from error
 
     def refresh_pull_request(self, task_id: str) -> Task:
+        """从 GitHub 刷新 Pull Request 状态并同步外部合入结果。
+
+        Args:
+            task_id: 已关联 GitHub PR 的任务 ID。
+
+        Returns:
+            PR 元数据和任务状态已刷新的任务。
+        """
         task = self._require_task(task_id)
         if task.remote_pull_request is None or self.github_delivery is None:
             raise ValueError("Task has no GitHub pull request")
@@ -1138,6 +1299,14 @@ class TaskOrchestrator:
         return task
 
     def sync_pull_request_comments(self, task_id: str) -> Task:
+        """同步 GitHub Pull Request 的会话评论和行级审查意见。
+
+        Args:
+            task_id: 已关联且尚未合入 GitHub PR 的任务 ID。
+
+        Returns:
+            评论列表及处理状态已更新的任务。
+        """
         task = self._require_task(task_id)
         if task.remote_pull_request is None or self.github_delivery is None:
             raise ValueError("Task has no GitHub pull request")
@@ -1189,6 +1358,21 @@ class TaskOrchestrator:
         job_id: str | None = None,
         result: str | None = None,
     ) -> Task:
+        """批量更新已同步 GitHub 评论的本地处理状态。
+
+        Args:
+            task_id: 评论所属任务 ID。
+            comment_keys: 需要更新的评论唯一键列表。
+            status: 新处理状态，例如 ``queued``、``resolved`` 或 ``failed``。
+            job_id: 可选的评论修复 Job ID。
+            result: 可选的 Agent 处理结果说明。
+
+        Returns:
+            评论状态已持久化的任务。
+
+        Raises:
+            ValueError: 一个或多个评论键已不存在。
+        """
         task = self._require_task(task_id)
         selected = set(comment_keys)
         matched = 0
@@ -1213,6 +1397,17 @@ class TaskOrchestrator:
         success: bool,
         detail: str,
     ) -> Task:
+        """完成 GitHub 评论修复，并将处理结果回复到远程 PR 页面。
+
+        Args:
+            task_id: 评论所属任务 ID。
+            comment_keys: 本轮已处理的评论唯一键列表。
+            success: Agent 是否成功完成评论要求。
+            detail: 修改文件、测试和提交等结果说明，或失败原因。
+
+        Returns:
+            评论状态和远程回复状态已更新的任务。
+        """
         task = self.update_github_comment_status(
             task_id,
             comment_keys,
@@ -1249,6 +1444,19 @@ class TaskOrchestrator:
         return task
 
     def merge_pull_request(self, task_id: str, actor: str, comment: str = "") -> Task:
+        """在用户最终确认后合入 GitHub Pull Request。
+
+        Args:
+            task_id: 等待 PR 合入审批的任务 ID。
+            actor: 确认合入的用户标识。
+            comment: 可选的合入说明。
+
+        Returns:
+            已记录合入 SHA、状态为 ``merged`` 的任务。
+
+        Raises:
+            ValueError: 任务未就绪、GitHub 未配置或远程合入失败。
+        """
         task = self._require_task(task_id)
         if task.status != TaskStatus.WAITING_MERGE_APPROVAL or task.remote_pull_request is None:
             raise ValueError("Task is not waiting for pull request merge approval")
@@ -1306,6 +1514,17 @@ class TaskOrchestrator:
         return self.merge_request_builder.write(task)
 
     def run_ui_acceptance(self, task_id: str) -> Task:
+        """手动重新执行任务的 UI 设计验收并更新 MR 草稿。
+
+        Args:
+            task_id: 已绑定 Figma 设计基线的任务 ID。
+
+        Returns:
+            已保存最新 UI 验收报告的任务。
+
+        Raises:
+            ValueError: 任务没有设计基线或 UI 验收服务未配置。
+        """
         task = self._require_task(task_id)
         if task.design_reference is None:
             raise ValueError("Task has no Figma design reference")
@@ -1590,11 +1809,16 @@ class TaskOrchestrator:
         return task
 
     def current_workspace_diff(self, task: Task) -> str:
-        """Return the cumulative diff that is actually present in the task worktree.
+        """读取任务 Worktree 中当前实际存在的累计 Diff。
 
-        This intentionally differs from ``task.result.diff`` after a failed repair:
-        result remains the last verified result, while the worktree may contain useful
-        unverified edits that the user still needs to inspect.
+        失败修复后它可能与 ``task.result.diff`` 不同：result 保留最近一次已验证结果，
+        Worktree 则可能包含仍值得用户检查的未验证修改。
+
+        Args:
+            task: 需要读取累计代码改动的任务。
+
+        Returns:
+            相对规划基线的累计 Diff；工作区不可用时回退到最近一次结果 Diff。
         """
         if not task.workspace:
             return task.result.diff if task.result else ""
@@ -1663,6 +1887,19 @@ class TaskOrchestrator:
         job_id: str,
         should_pause: Callable[[], bool] | None = None,
     ) -> Task:
+        """校验最近持久化检查点并从对应工作流阶段继续执行。
+
+        Args:
+            task_id: 需要恢复的任务 ID。
+            job_id: 承载本次恢复执行的后台 Job ID。
+            should_pause: 可选暂停判定函数，允许恢复后再次在安全检查点停止。
+
+        Returns:
+            从检查点继续开发、测试或审查后的最新任务。
+
+        Raises:
+            ValueError: 检查点缺失、已漂移或其阶段无法恢复。
+        """
         task = self._require_task(task_id)
         checkpoint = self.latest_workflow_checkpoint(task_id)
         if checkpoint is None:
@@ -1889,6 +2126,19 @@ class TaskOrchestrator:
                 raise ValueError("Workspace diff changed after the checkpoint")
 
     def dry_run_checkpoint(self, task_id: str, checkpoint_id: str) -> ReplayResult:
+        """只读验证检查点是否仍可恢复，不修改任务或工作区。
+
+        Args:
+            task_id: 检查点所属任务 ID。
+            checkpoint_id: 待验证的检查点 ID。
+
+        Returns:
+            包含有效性、下一动作、检查项和警告的演练结果。
+
+        Raises:
+            KeyError: 检查点不存在或不属于指定任务。
+            ValueError: Trace 服务未配置。
+        """
         task = self._require_task(task_id)
         checkpoint = self.store.get_checkpoint(checkpoint_id)
         if checkpoint is None or checkpoint.task_id != task_id:
@@ -1918,6 +2168,16 @@ class TaskOrchestrator:
             )
 
     def revise(self, task_id: str, actor: str, feedback: str) -> Task:
+        """根据人工补充意见重新生成需求分析和技术方案。
+
+        Args:
+            task_id: 等待需求输入或技术方案审批的任务 ID。
+            actor: 提出修改意见的用户标识。
+            feedback: 需要纳入规划的新信息或方案调整意见。
+
+        Returns:
+            已重新规划、等待再次审批的任务。
+        """
         task = self._require_task(task_id)
         if task.status not in {TaskStatus.WAITING_REQUIREMENT_APPROVAL, TaskStatus.WAITING_REQUIREMENT_INPUT}:
             raise ValueError("Only a task waiting for input or approval can be revised")
@@ -1945,6 +2205,14 @@ class TaskOrchestrator:
         self.store.save_task(task)
 
     def latest_workflow_checkpoint(self, task_id: str) -> TaskCheckpoint | None:
+        """读取任务在 LangGraph 状态存储中的最新工作流检查点。
+
+        Args:
+            task_id: 任务唯一标识。
+
+        Returns:
+            最新工作流检查点；尚未保存时返回 ``None``。
+        """
         task = self._require_task(task_id)
         return self.workflow_state.latest_checkpoint(task)
 
