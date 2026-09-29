@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Dev Agent</title>
-    <link rel="stylesheet" href="/assets/app.css?v=26" />
+    <link rel="stylesheet" href="/assets/app.css?v=27" />
   </head>
   <body>
     <div class="app-shell">
@@ -98,12 +98,12 @@
             </section>
 
             <section id="review-view" class="workspace-view review-workspace hidden">
+              <section id="review-gate" class="panel approval-panel review-gate-toolbar hidden"><div><span class="eyebrow">REVIEW OVERRIDE</span><h2>审查仍有阻塞问题</h2><p id="review-gate-message">建议先处理 findings，必要时可人工批准。</p></div><div class="actions"><button class="secondary" id="rerun-review-button">重新审查</button><button id="approve-review-button">人工批准 CR</button></div></section>
               <article class="panel diff-panel review-diff-panel"><div class="section-title"><span>Δ</span><div><h2>累计 Git Diff</h2><p>相对于任务基线的当前净修改</p></div></div><div id="review-diff" class="diff-view"></div></article>
               <div class="view-scroll review-evidence">
                 <section id="result-panel" class="hidden"><article class="panel"><div class="section-title"><span>T</span><div><h2>测试证据</h2><p>测试与构建输出</p></div></div><pre id="test-output"></pre></article><article class="panel"><div class="section-title"><span>MR</span><div><h2>MR 描述</h2><p id="mr-title"></p></div></div><pre id="mr-description"></pre></article></section>
                 <section id="ui-acceptance-panel" class="panel ui-acceptance-panel hidden"><div class="ui-acceptance-heading"><div class="section-title"><span>UI</span><div><h2>UI 验收</h2><p id="ui-acceptance-summary">Figma 设计与浏览器实现证据</p></div></div><button type="button" class="secondary" id="rerun-ui-acceptance-button">重新验收</button></div><div id="ui-acceptance-metrics" class="ui-acceptance-metrics"></div><div id="ui-acceptance-checks" class="ui-acceptance-checks"></div><div id="ui-acceptance-images" class="ui-acceptance-images"></div></section>
                 <section id="review-panel" class="panel hidden"><div class="section-title"><span>CR</span><div><h2>Code Review</h2><p>规则与 Reviewer 审查记录</p></div></div><div id="review-rounds"></div></section>
-                <section id="review-gate" class="panel approval-panel hidden"><div><span class="eyebrow">REVIEW OVERRIDE</span><h2>审查仍有阻塞问题</h2><p id="review-gate-message">建议先处理 findings，必要时可人工批准。</p></div><div class="actions"><button class="secondary" id="rerun-review-button">重新审查</button><button id="approve-review-button">人工批准 CR</button></div></section>
                 <section id="release-gate" class="panel approval-panel hidden"><div><span class="eyebrow">GITHUB GATE</span><h2>MR 与 CR 已就绪</h2><p>点击发布后直接创建 GitHub Draft Pull Request。</p></div><div class="actions"><button class="secondary" id="reject-release-button">拒绝发布</button><button id="publish-pr-button">发布 GitHub PR <b>→</b></button></div></section>
                 <section id="pull-request-panel" class="panel approval-panel hidden"><div><span class="eyebrow">GITHUB PR</span><h2 id="pull-request-title"></h2><p id="pull-request-meta"></p><a id="pull-request-link" target="_blank" rel="noopener noreferrer">在 GitHub 打开</a></div><div class="actions"><button class="secondary" id="refresh-pr-button">同步状态</button><button id="merge-pr-button">确认合入</button></div></section>
                 <section id="github-comments-panel" class="panel hidden"><div class="github-comments-heading"><div class="section-title"><span>GH</span><div><h2>PR Review 意见</h2><p>手动选择评论，或使用 /agent fix 自动触发</p></div></div><button type="button" class="secondary" id="sync-github-comments-button">同步评论</button></div><div id="github-comments-list" class="github-comments-list"></div><div class="actions github-comments-actions"><button type="button" id="process-github-comments-button">交给 Agent 处理 <b>→</b></button></div></section>
@@ -137,6 +137,6 @@
       </aside>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="/assets/app.js?v=42"></script>
+    <script src="/assets/app.js?v=43"></script>
   </body>
 </html>

@@ -210,6 +210,7 @@ function setView(view) {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", view !== "create" && button.dataset.view === view);
   });
+  if (currentTask) renderReviewGate(currentTask);
   updateNavigationAvailability();
   if (view === "observability" && currentTask) {
     observabilityTaskId = currentTask.id;
@@ -340,7 +341,8 @@ function closeRecoveryDetails() {
 
 function renderReviewGate(task) {
   const repairing = task.status === "review_repairing";
-  const visible = ["changes_requested", "review_repairing"].includes(task.status);
+  const visible = activeView === "review"
+    && ["changes_requested", "review_repairing"].includes(task.status);
   $("#review-gate").classList.toggle("hidden", !visible);
   $("#review-gate-message").textContent = repairing
     ? "Agent 正在后台修复阻塞问题并重新执行 Review，请等待当前执行结束。"
