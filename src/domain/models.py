@@ -231,12 +231,14 @@ class ReviewRound(BaseModel):
     summary: str
     findings: list[ReviewFinding] = Field(default_factory=list)
     deterministic_checks: list[str] = Field(default_factory=list)
+    baseline_restore_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
 
 
 class ReviewerModelOutput(BaseModel):
     summary: str
     findings: list[ReviewFinding] = Field(default_factory=list, max_length=12)
+    baseline_restore_ids: list[str] = Field(default_factory=list, max_length=12)
 
 
 class DesignReference(BaseModel):

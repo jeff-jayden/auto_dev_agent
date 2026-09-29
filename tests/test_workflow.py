@@ -1,8 +1,9 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import build_orchestrator
+from tests.support import BASE_SERVICE, build_orchestrator
 from agents import DevelopmentRunOutcome
 from domain.models import (
     DevelopmentAttempt,
@@ -172,6 +173,78 @@ diff --git a/index.js b/index.js
 
         self.assertEqual(review.decision, "changes_requested")
         self.assertTrue(any(item.blocking for item in review.findings if item.category == "Functionality"))
+
+    def test_reviewer_selected_deletion_is_restored_exactly_from_git_baseline(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "恢复误删内容", "只修改任务优先级，不允许重写原有任务标题和其他业务数据。"
+        )
+        task = orchestrator.approve(task.id, "tester", "方案可执行")
+        workspace = Path(task.workspace)
+        target = workspace / "task_service.py"
+        target.write_text(
+            "def create_task(title: str) -> dict[str, object]:\n    pass\n",
+            encoding="utf-8",
+        )
+        task.result.diff = orchestrator.workspace_manager.diff(workspace)
+        candidates = orchestrator._baseline_deletion_candidates(task)
+        selected = next(
+            item for item in candidates
+            if 'return {"id": 1, "title": title.strip()' in item["original_text"]
+        )
+
+        class BaselineRestoreGateway:
+            enabled = True
+
+            def generate_structured(self, system_prompt, user_prompt, output_model):
+                payload = json.loads(user_prompt)
+                self.candidates = payload["baseline_deletion_candidates"]
+                return ReviewerModelOutput(
+                    summary="发现未授权删除",
+                    findings=[ReviewFinding(
+                        severity="medium",
+                        category="functionality",
+                        file="task_service.py",
+                        message="原有任务字段被需求外删除。",
+                        suggestion="使用 Git 基线恢复候选片段。",
+                    )],
+                    baseline_restore_ids=[selected["id"], "restore-unknown"],
+                )
+
+        gateway = BaselineRestoreGateway()
+        orchestrator.code_review_agent.model_gateway = gateway
+        review = orchestrator.code_review_agent.review(
+            task, 2, baseline_deletion_candidates=candidates
+        )
+        restored = orchestrator._restore_review_baseline_deletions(task, review)
+
+        self.assertEqual(review.baseline_restore_ids, [selected["id"]])
+        self.assertEqual(restored[0]["original_text"], selected["original_text"])
+        self.assertEqual(target.read_text(encoding="utf-8"), BASE_SERVICE)
+        self.assertTrue(gateway.candidates)
+        event_types = [item.event_type for item in orchestrator.store.list_events(task.id)]
+        self.assertIn("baseline_content_restored", event_types)
+
+    def test_stale_baseline_restore_id_cannot_overwrite_newer_edits(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "拒绝过期恢复", "验证基线恢复只能应用到 Reviewer 实际审查过的工作区快照。"
+        )
+        task = orchestrator.approve(task.id, "tester", "方案可执行")
+        workspace = Path(task.workspace)
+        target = workspace / "task_service.py"
+        target.write_text("def create_task(title: str):\n    pass\n", encoding="utf-8")
+        candidates = orchestrator._baseline_deletion_candidates(task)
+        candidate_id = candidates[0]["id"]
+        target.write_text("def create_task(title: str):\n    return None\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "stale or unknown"):
+            orchestrator.workspace_manager.restore_baseline_deletions(
+                workspace,
+                task.repository_analysis.head_sha,
+                task.technical_plan.affected_files,
+                [candidate_id],
+            )
 
     def test_reject_stops_before_development(self):
         orchestrator = build_orchestrator(self.runtime)

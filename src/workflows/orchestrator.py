@@ -1637,7 +1637,11 @@ class TaskOrchestrator:
 
         def review_node(_state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEWING)
-            review = self.code_review_agent.review(task, len(task.reviews) + 1)
+            review = self.code_review_agent.review(
+                task,
+                len(task.reviews) + 1,
+                baseline_deletion_candidates=self._baseline_deletion_candidates(task),
+            )
             task.reviews.append(review)
             self._event(
                 task,
@@ -1678,7 +1682,9 @@ class TaskOrchestrator:
 
         def repair_node(state: dict) -> dict:
             self._transition(task, TaskStatus.REVIEW_REPAIRING)
-            feedback = state["feedback"]
+            review = state["review"]
+            restored = self._restore_review_baseline_deletions(task, review)
+            feedback = self._review_feedback(review, restored)
             outcome = self.code_development_agent.run(
                 task,
                 Path(task.workspace),
@@ -1946,14 +1952,64 @@ class TaskOrchestrator:
         task.updated_at = datetime.now(UTC)
         self.store.save_task(task)
 
+    def _baseline_deletion_candidates(self, task: Task) -> list[dict]:
+        if not task.workspace or not task.repository_analysis or not task.technical_plan:
+            return []
+        return self.workspace_manager.baseline_deletion_candidates(
+            Path(task.workspace),
+            task.repository_analysis.head_sha,
+            task.technical_plan.affected_files,
+        )
+
+    def _restore_review_baseline_deletions(self, task: Task, review) -> list[dict]:
+        candidate_ids = list(dict.fromkeys(review.baseline_restore_ids))
+        if not candidate_ids:
+            return []
+        if not task.workspace or not task.repository_analysis or not task.technical_plan:
+            raise ValueError("Task baseline is unavailable for deterministic review repair")
+        restored = self.workspace_manager.restore_baseline_deletions(
+            Path(task.workspace),
+            task.repository_analysis.head_sha,
+            task.technical_plan.affected_files,
+            candidate_ids,
+        )
+        self._event(
+            task,
+            "baseline_content_restored",
+            f"已从 Git 基线确定性恢复 {len(restored)} 个误删片段",
+            {
+                "review_round": review.round,
+                "restorations": [
+                    {
+                        "id": item["id"],
+                        "file": item["file"],
+                        "baseline_start_line": item["baseline_start_line"],
+                        "baseline_end_line": item["baseline_end_line"],
+                    }
+                    for item in restored
+                ],
+            },
+        )
+        return restored
+
     @staticmethod
-    def _review_feedback(review) -> str:
+    def _review_feedback(review, restored: list[dict] | None = None) -> str:
         lines = [
             f"- [{item.severity}] {item.file or 'general'}"
             f"{':' + str(item.line) if item.line else ''}: {item.message} {item.suggestion}"
             for item in review.findings if item.blocking
         ]
-        return "Code Review 阻塞问题，必须全部修复：\n" + "\n".join(lines)
+        restoration_note = ""
+        if restored:
+            restored_ranges = ", ".join(
+                f"{item['file']}:{item['baseline_start_line']}-{item['baseline_end_line']}"
+                for item in restored
+            )
+            restoration_note = (
+                "\n系统已从任务 Git 基线原样恢复以下误删片段："
+                f"{restored_ranges}。不要重新编造这些内容；在恢复后的真实文件上仅完成需求授权的修改。"
+            )
+        return "Code Review 阻塞问题，必须全部修复：\n" + "\n".join(lines) + restoration_note
 
     def resume_from_checkpoint(
         self,
@@ -2104,11 +2160,12 @@ class TaskOrchestrator:
             task.error = "Blocking review findings require a configured Developer Agent"
             return task
         self._transition(task, TaskStatus.REVIEW_REPAIRING)
+        restored = self._restore_review_baseline_deletions(task, review)
         outcome = self.code_development_agent.run(
             task,
             Path(task.workspace),
             dependency_repository=Path(repository.local_path),
-            review_feedback=self._review_feedback(review),
+            review_feedback=self._review_feedback(review, restored),
             checkpoint_handler=handler,
         )
         self._append_attempts(task, outcome.attempts)

@@ -37,13 +37,23 @@ class CodeReviewAgent:
         """
         self.model_gateway = model_gateway
 
-    def review(self, task: Task, round_number: int) -> ReviewRound:
+    def review(
+        self,
+        task: Task,
+        round_number: int,
+        baseline_deletion_candidates: list[dict] | None = None,
+    ) -> ReviewRound:
         if task.result is None or task.merge_request is None:
             raise ValueError("MR draft and execution result are required before review")
 
         changed_lines = self._changed_lines(task.result.diff)
         findings, checks = self._deterministic_findings(task, changed_lines)
-        findings.extend(self._model_findings(task, changed_lines))
+        model_findings, baseline_restore_ids = self._model_findings(
+            task,
+            changed_lines,
+            baseline_deletion_candidates or [],
+        )
+        findings.extend(model_findings)
 
         normalized: list[ReviewFinding] = []
         seen: set[tuple] = set()
@@ -73,6 +83,7 @@ class CodeReviewAgent:
             summary=summary,
             findings=normalized,
             deterministic_checks=checks,
+            baseline_restore_ids=baseline_restore_ids,
         )
 
     def run_loop(
@@ -262,9 +273,14 @@ class CodeReviewAgent:
             ))
         return findings
 
-    def _model_findings(self, task: Task, changed_lines: dict[str, list[tuple[int, str]]]) -> list[ReviewFinding]:
+    def _model_findings(
+        self,
+        task: Task,
+        changed_lines: dict[str, list[tuple[int, str]]],
+        baseline_deletion_candidates: list[dict],
+    ) -> tuple[list[ReviewFinding], list[str]]:
         if not self.model_gateway.enabled:
-            return []
+            return [], []
         current_files: dict[str, str] = {}
         if task.workspace and task.technical_plan:
             workspace = Path(task.workspace).resolve()
@@ -281,6 +297,10 @@ class CodeReviewAgent:
             "既有入口、导出、路由、组件组合、公共接口或调用链，而 requirement/technical_plan 没有"
             "明确授权，即使新代码能运行，也必须报告 medium acceptance/functionality 问题。"
             "intentional_removals 只是 Developer 的声明，必须与需求和 Diff 独立核对，不能直接采信。"
+            "baseline_deletion_candidates 是系统从 Git 基线与当前工作区精确计算出的删除/替换片段。"
+            "只有当某个候选片段确属需求和技术方案未授权的误删时，才把它的 id 放入 baseline_restore_ids；"
+            "系统会从 Git 基线确定性恢复该片段，禁止在 suggestion 中要求 Developer 凭记忆重写原内容。"
+            "若删除已由需求、技术方案或有效 intentional_removals 明确授权，不得选择对应候选。"
             "current_files 是审查时的真实工作区快照；判断行为是否存在时必须同时检查它。"
             "文件未出现在 Diff 只表示本任务没有修改它，不能据此推断其中的功能或文本不存在。"
             "输出严格 JSON。",
@@ -304,13 +324,25 @@ class CodeReviewAgent:
                 "diff": task.result.diff,
                 "current_files": current_files,
                 "developer_semantic_contract": self._latest_semantic_contract(task),
+                "baseline_deletion_candidates": [
+                    {
+                        "id": item["id"],
+                        "file": item["file"],
+                        "operation": item["operation"],
+                        "baseline_lines": [item["baseline_start_line"], item["baseline_end_line"]],
+                        "current_lines": [item["current_start_line"], item["current_end_line"]],
+                        "original_text": item["original_text"][:12000],
+                        "current_text": item["current_text"][:12000],
+                    }
+                    for item in baseline_deletion_candidates[:30]
+                ],
                 "valid_changed_lines": {path: [line for line, _ in lines] for path, lines in changed_lines.items()},
                 "schema": ReviewerModelOutput.model_json_schema(),
             }, ensure_ascii=False),
             ReviewerModelOutput,
         )
         if not isinstance(response, ReviewerModelOutput):
-            return []
+            return [], []
         valid_paths = set(changed_lines)
         result: list[ReviewFinding] = []
         for finding in response.findings:
@@ -328,7 +360,13 @@ class CodeReviewAgent:
                 finding.severity = "medium"
                 finding.blocking = False
             result.append(finding)
-        return result
+        valid_restore_ids = {item["id"] for item in baseline_deletion_candidates}
+        restore_ids = [
+            candidate_id
+            for candidate_id in dict.fromkeys(response.baseline_restore_ids)
+            if candidate_id in valid_restore_ids
+        ]
+        return result, restore_ids
 
     @staticmethod
     def _latest_semantic_contract(task: Task) -> dict[str, list[str]]:
