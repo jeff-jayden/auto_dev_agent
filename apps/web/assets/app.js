@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 let currentTask = null;
 let currentJob = null;
+let currentProgress = null;
 let watchGeneration = 0;
 let knownTasks = [];
 let renderedChatTaskId = null;
@@ -249,11 +250,17 @@ async function loadCurrentDiffFiles(task, force = false) {
   return currentDiffFiles.files;
 }
 
-async function openDevelopmentDiff() {
+async function openDevelopmentDiff(paths = []) {
   if (!currentTask) return;
-  const files = await loadCurrentDiffFiles(currentTask, true);
+  const allFiles = await loadCurrentDiffFiles(currentTask, true);
+  const selectedPaths = new Set(paths || []);
+  const files = selectedPaths.size
+    ? allFiles.filter((file) => selectedPaths.has(file.path))
+    : allFiles;
   await renderMonacoDiff(files);
-  $("#diff-scope-label").textContent = "相对于任务基线的当前文件对比";
+  $("#diff-scope-label").textContent = selectedPaths.size
+    ? `当前步骤相关文件（${files.length}）`
+    : "相对于任务基线的当前文件对比";
   developmentDiffState = {open: true, taskId: currentTask.id};
   $("#development-view").classList.add("diff-open");
   $("#development-diff-drawer").setAttribute("aria-hidden", "false");
@@ -716,6 +723,129 @@ function renderRagComparison(comparison) {
   panel.innerHTML = `<div class="rag-heading"><div><h3>混合 RAG A/B 评测</h3><p>相同 ${comparison.case_count} 个标准 Case · Top ${comparison.k} · 旧关键词基线对比混合语义检索</p></div><span>基线 → 混合 RAG</span></div><div class="rag-metrics">${metrics}</div><details><summary>查看每个 Case 的召回文件</summary><div class="rag-table-wrap"><table><thead><tr><th>Case / 查询</th><th>标准答案</th><th>旧检索</th><th>混合 RAG</th></tr></thead><tbody>${cases}</tbody></table></div></details>`;
 }
 
+function formatRuntime(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function describeAgentActivity(span, job, task) {
+  const name = span?.name || "";
+  const descriptions = {
+    "tool.read_context": "正在读取相关代码与测试文件",
+    "tool.search_text": "正在仓库中检索相关实现",
+    "tool.search_symbol": "正在定位代码符号与调用关系",
+    "tool.find_references": "正在查找符号引用位置",
+    "tool.read_file": "正在读取目标文件",
+    "tool.git_history": "正在检查 Git 历史",
+    "agent.context_exploration": "Developer Agent 正在自主补充上下文",
+    "agent.langchain_create_agent": "Developer Agent 正在选择下一步工具",
+    "llm.ReplacementDevelopmentProposal": "正在生成可执行的代码修改方案",
+    "tool.apply_proposal": "正在将修改写入隔离工作区",
+    "tool.run_tests": "正在运行测试与构建命令",
+    "tool.git_diff": "正在整理当前代码变更",
+    "llm.ReviewerModelOutput": "Reviewer Agent 正在审查代码",
+    "agent.review": "正在执行 Code Review",
+  };
+  const title = descriptions[name]
+    || (span ? `${span.kind === "tool" ? "工具" : "Agent"} 正在执行 ${name}` : "等待下一项后台动作");
+  const rawDetail = span?.output_summary || span?.input_summary || job?.error || "执行信息会在检查点和工具调用完成后自动更新。";
+  const detail = String(rawDetail).replace(/\s+/g, " ").slice(0, 180);
+  return {title, detail, name, taskStatus: task.status};
+}
+
+function developmentPhaseIndex(progress, task) {
+  const stages = new Set((progress.checkpoints || []).map((item) => item.stage));
+  if (["review_approved", "waiting_release_approval", "publishing_pull_request", "waiting_merge_approval", "merging", "merged"].includes(task.status)) return 5;
+  if (stages.has("review_round_saved") || ["reviewing", "review_repairing", "changes_requested"].includes(task.status)) return 4;
+  if (stages.has("test_result_saved") || ["testing", "repairing", "change_ready", "generating_mr"].includes(task.status)) return 3;
+  if (stages.has("patch_applied")) return 2;
+  if (stages.has("proposal_ready")) return 1;
+  return progress.job?.started_at || progress.trace ? 0 : -1;
+}
+
+function renderDevelopmentProgress(task, progress) {
+  currentProgress = progress;
+  const job = progress.job;
+  const spans = progress.spans || [];
+  const activeSpan = [...spans].reverse().find((span) => span.status === "running") || spans[spans.length - 1] || null;
+  const activity = describeAgentActivity(activeSpan, job, task);
+  const plannedSteps = task.technical_plan.development_steps || [];
+  const executions = task.step_executions || [];
+  const activeExecution = executions.find((item) => item.status === "running")
+    || executions.find((item) => item.status === "failed")
+    || executions.find((item) => item.status === "pending");
+  const activeStepIndex = activeExecution
+    ? Math.max(0, plannedSteps.findIndex((item) => item.id === activeExecution.step_id))
+    : Math.min(executions.filter((item) => item.status === "completed").length, Math.max(0, plannedSteps.length - 1));
+  const stepText = plannedSteps.length
+    ? `步骤 ${Math.min(activeStepIndex + 1, plannedSteps.length)}/${plannedSteps.length} · ${activeExecution?.title || plannedSteps[activeStepIndex]?.title || "准备执行"}`
+    : "兼容模式 · 单步骤任务";
+  const activeStatuses = new Set(["queued", "running", "pause_requested"]);
+  const finishedSuccessfully = job?.status === "succeeded";
+  const failed = job?.status === "failed" || task.status === "failed";
+  const reviewBlocked = task.status === "changes_requested";
+  const paused = ["paused", "cancelled"].includes(job?.status);
+  const liveClass = failed || reviewBlocked ? "failed" : paused ? "paused" : activeStatuses.has(job?.status) ? "running" : finishedSuccessfully ? "completed" : "idle";
+  const liveLabels = {running: "执行中", completed: "已完成", failed: "执行失败", paused: "已暂停", idle: "未运行"};
+  $("#development-live-state").className = `live-state ${liveClass}`;
+  $("#development-live-state").textContent = reviewBlocked ? "审查阻塞" : liveLabels[liveClass];
+  $("#development-progress-summary").textContent = job ? `${stepText} · Job ${job.id}` : "等待开发任务开始";
+  const activityTitle = activeStatuses.has(job?.status)
+    ? activity.title
+    : activity.title.replace(/^正在/, "最近完成：").replace(/^Developer Agent 正在/, "Developer Agent 最近完成：");
+  $("#development-current-activity").textContent = failed ? "执行遇到问题，等待处理" : activityTitle;
+  $("#development-activity-detail").textContent = activity.detail;
+
+  const phaseDefinitions = [
+    ["上下文", "读取代码与依赖"], ["方案", "生成修改方案"], ["写入", "应用代码变更"],
+    ["测试", "运行测试验证"], ["审查", "Reviewer 审查"],
+  ];
+  const reachedPhase = developmentPhaseIndex(progress, task);
+  const currentPhase = Math.min(Math.max(reachedPhase, 0), phaseDefinitions.length - 1);
+  $("#development-phase-track").innerHTML = phaseDefinitions.map(([label, title], index) => {
+    let state = index < reachedPhase || reachedPhase === phaseDefinitions.length ? "completed" : "pending";
+    if (index === currentPhase && activeStatuses.has(job?.status)) state = "running";
+    if ((failed || (reviewBlocked && index === 4)) && index === currentPhase) state = "failed";
+    if (paused && index === currentPhase) state = "paused";
+    const marker = state === "completed" ? "✓" : state === "failed" ? "!" : String(index + 1);
+    return `<div class="development-phase ${state}" title="${escapeHtml(title)}"><span>${marker}</span><b>${escapeHtml(label)}</b></div>`;
+  }).join("");
+
+  const startedAt = job?.started_at ? new Date(job.started_at).getTime() : null;
+  const endedAt = job?.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+  const tokenCount = spans.reduce((total, span) => total + Number(span.attributes?.prompt_tokens || 0) + Number(span.attributes?.completion_tokens || 0), 0);
+  const toolCount = spans.filter((span) => span.kind === "tool").length;
+  const heartbeatAge = job?.heartbeat_at ? Math.max(0, Math.floor((Date.now() - new Date(job.heartbeat_at).getTime()) / 1000)) : null;
+  $("#development-runtime-metrics").innerHTML = [
+    startedAt ? `耗时 ${formatRuntime(endedAt - startedAt)}` : null,
+    job?.heartbeat_at ? `心跳 ${heartbeatAge}s 前` : null,
+    spans.length ? `${toolCount} 次工具调用` : null,
+    tokenCount ? `${tokenCount} Tokens` : null,
+  ].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+
+  const alert = $("#development-progress-alert");
+  let alertText = "";
+  let alertFailed = false;
+  if (failed) { alertText = `执行失败：${job?.error || "请查看最近动态并重试当前步骤"}`; alertFailed = true; }
+  else if (reviewBlocked) { alertText = "Code Review 发现阻塞问题，可以查看审查意见后继续让 Agent 修复。"; alertFailed = true; }
+  else if (job?.status === "pause_requested") alertText = "已申请暂停，Agent 会在下一个安全检查点停止。";
+  else if (paused) alertText = "任务已暂停，可以从最近检查点继续执行。";
+  else if (heartbeatAge != null && heartbeatAge > 20 && job?.status === "running") alertText = `Worker 已 ${heartbeatAge} 秒没有更新心跳，可能已经中断。`;
+  else if ((job?.attempts || 0) > 1) alertText = `当前是第 ${job.attempts} 次执行，Agent 正在基于上次失败继续处理。`;
+  alert.textContent = alertText;
+  alert.classList.toggle("hidden", !alertText);
+  alert.classList.toggle("failed", alertFailed);
+
+  const recentEvents = (progress.events || []).slice(-5);
+  $("#development-recent-count").textContent = recentEvents.length;
+  $("#development-recent-events").innerHTML = recentEvents.map((event) => `<div class="development-recent-event"><time>${new Date(event.created_at).toLocaleTimeString()}</time><span>${escapeHtml(event.message)}</span></div>`).join("") || "<p>尚无执行动态。</p>";
+  $("#progress-open-observability").classList.toggle("hidden", !progress.trace);
+  $("#progress-pause-button").classList.toggle("hidden", !["queued", "running"].includes(job?.status));
+  $("#progress-resume-button").classList.toggle("hidden", !paused);
+  $("#progress-retry-button").classList.toggle("hidden", !failed);
+}
+
 function renderJob(job) {
   currentJob = job;
   const panel = $("#job-panel");
@@ -813,15 +943,26 @@ async function render(task) {
   $("#development-step-summary").textContent = plannedSteps.length
     ? `已完成 ${completedStepCount}/${plannedSteps.length} · 每一步只允许修改批准文件`
     : "旧任务按单步骤兼容执行";
-  $("#development-steps").innerHTML = (plannedSteps.length ? plannedSteps : [{
+  const displayedSteps = plannedSteps.length ? plannedSteps : [{
     id: "legacy-step", title: "完成批准方案", objective: task.technical_plan.approach,
     allowed_files: task.technical_plan.affected_files, acceptance_checks: task.technical_plan.test_plan || [],
-  }]).map((step, index) => {
+  }];
+  $("#development-steps").innerHTML = displayedSteps.map((step, index) => {
     const execution = stepExecutions.get(step.id) || {status: "pending", changed_files: [], attempt_count: 0};
     const labels = {pending: "待执行", running: "执行中", paused: "已暂停", completed: "已完成", failed: "失败"};
     const files = (step.allowed_files || []).map((file) => `<code>${escapeHtml(file)}</code>`).join("");
-    return `<article class="development-step step-${escapeHtml(execution.status)}"><div class="step-head"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(step.title)}</b><small>${escapeHtml(labels[execution.status] || execution.status)}${execution.attempt_count ? ` · ${execution.attempt_count} 次尝试` : ""}</small></div></div><p>${escapeHtml(step.objective)}</p><div class="step-files">${files}</div>${execution.error ? `<p class="step-error">${escapeHtml(execution.error)}</p>` : ""}</article>`;
+    const changedFiles = execution.changed_files || [];
+    const checks = (step.acceptance_checks || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    const testSummary = execution.test_output ? String(execution.test_output).replace(/\s+/g, " ").slice(-240) : "尚无测试输出";
+    const relatedPaths = changedFiles.length ? changedFiles : (step.allowed_files || []);
+    return `<article class="development-step step-${escapeHtml(execution.status)}"><div class="step-head"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(step.title)}</b><small>${escapeHtml(labels[execution.status] || execution.status)}${execution.attempt_count ? ` · ${execution.attempt_count} 次尝试` : ""}</small></div></div><p>${escapeHtml(step.objective)}</p><div class="step-files">${files}</div>${execution.error ? `<p class="step-error">${escapeHtml(execution.error)}</p>` : ""}<details class="step-detail"><summary>步骤详情</summary><div class="step-detail-content"><b>验收检查</b><ul>${checks || "<li>沿用任务级验收标准</li>"}</ul><b>最近测试</b><p>${escapeHtml(testSummary)}</p><div class="step-detail-actions"><span>${changedFiles.length ? `已修改 ${changedFiles.length} 个文件` : "尚未产生代码修改"}</span>${relatedPaths.length ? `<button type="button" class="secondary step-view-files" data-step-id="${escapeHtml(step.id)}">查看相关文件</button>` : ""}</div></div></details></article>`;
   }).join("");
+  document.querySelectorAll(".step-view-files").forEach((button) => button.addEventListener("click", () => {
+    const step = displayedSteps.find((item) => item.id === button.dataset.stepId);
+    const execution = stepExecutions.get(button.dataset.stepId);
+    const paths = execution?.changed_files?.length ? execution.changed_files : (step?.allowed_files || []);
+    openDevelopmentDiff(paths).catch((error) => notify(error.message));
+  }));
 
   const analysis = task.repository_analysis;
   $("#repo-facts").innerHTML = [
@@ -855,12 +996,14 @@ async function render(task) {
   $("#risk-panel").classList.toggle("hidden", !waitingRisk);
   $("#risk-reasons").innerHTML = (task.metadata.risk_reasons || []).map((reason) => `<p>⚠ ${escapeHtml(reason)}</p>`).join("");
 
-  const [events, recovery] = await Promise.all([
-    api(`/api/tasks/${task.id}/events`),
+  const [progress, recovery] = await Promise.all([
+    api(`/api/tasks/${task.id}/progress`),
     api(`/api/tasks/${task.id}/recovery`),
   ]);
+  const events = progress.events || [];
   task.recovery = recovery;
   renderRecovery(recovery);
+  renderDevelopmentProgress(task, progress);
   renderTimeline(events, new Map(), task.id);
   $("#approval-panel").classList.toggle("hidden", !["waiting_requirement_approval", "waiting_requirement_input"].includes(task.status));
   const hasResult = Boolean(task.result); $("#result-panel").classList.toggle("hidden", !hasResult);
@@ -1269,6 +1412,41 @@ $("#rollback-feedback-button").addEventListener("click", async () => {
 });
 $("#open-current-diff-button").addEventListener("click", openCurrentDevelopmentDiff);
 $("#close-diff-button").addEventListener("click", closeDevelopmentDiff);
+$("#progress-open-observability").addEventListener("click", () => setView("observability"));
+$("#progress-pause-button").addEventListener("click", async () => {
+  const job = currentProgress?.job;
+  if (!job) return;
+  const button = $("#progress-pause-button"); button.disabled = true; button.textContent = "正在申请暂停…";
+  try {
+    const updated = await api(`/api/jobs/${job.id}/cancel`, {method: "POST"});
+    renderJob(updated);
+    notify("已申请暂停，将在下一个安全检查点停止");
+  } catch (error) { notify(error.message); }
+  finally { button.disabled = false; button.textContent = "暂停执行"; }
+});
+$("#progress-resume-button").addEventListener("click", async () => {
+  const job = currentProgress?.job;
+  if (!job) return;
+  const button = $("#progress-resume-button"); button.disabled = true; button.textContent = "正在恢复…";
+  try {
+    const resumed = await api(`/api/jobs/${job.id}/resume`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "从开发进度面板继续执行"})});
+    renderJob(resumed);
+    notify("已从最近检查点恢复执行");
+    await watchJob(resumed);
+  } catch (error) { notify(error.message); }
+  finally { button.disabled = false; button.textContent = "从检查点继续"; }
+});
+$("#progress-retry-button").addEventListener("click", async () => {
+  if (!currentTask) return;
+  const button = $("#progress-retry-button"); button.disabled = true; button.textContent = "正在重试…";
+  try {
+    const retried = await api(`/api/tasks/${currentTask.id}/retry`, {method: "POST", body: JSON.stringify({actor: "web-user", comment: "从失败步骤分析原因并继续"})});
+    renderJob(retried);
+    notify("Agent 将从失败位置分析并继续开发");
+    await watchJob(retried);
+  } catch (error) { notify(error.message); }
+  finally { button.disabled = false; button.textContent = "重试当前步骤"; }
+});
 $("#reject-release-button").addEventListener("click", async () => {
   try {
     const task = await api("/api/tasks/" + currentTask.id + "/release/reject", {method: "POST", body: JSON.stringify({actor: "web-user", comment: "暂不进入发布阶段"})});

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Dev Agent</title>
-    <link rel="stylesheet" href="/assets/app.css?v=31" />
+    <link rel="stylesheet" href="/assets/app.css?v=34" />
   </head>
   <body>
     <div class="app-shell">
@@ -90,6 +90,7 @@
             <section id="development-view" class="workspace-view development-workspace hidden">
               <div class="workspace-column chat-column">
                 <section id="risk-panel" class="panel approval-panel risk-panel hidden"><div><span class="eyebrow">HIGH RISK</span><h2>检测到高风险修改</h2><div id="risk-reasons"></div></div><div class="actions"><button class="secondary" id="risk-reject-button">拒绝</button><button id="risk-approve-button">批准并继续</button></div></section>
+                <section id="development-progress-panel" class="panel development-progress-panel"><div class="development-progress-heading"><div class="section-title"><span>▶</span><div><h2>实时执行进度</h2><p id="development-progress-summary">等待开发任务开始</p></div></div><span id="development-live-state" class="live-state idle">未运行</span></div><div id="development-progress-alert" class="progress-alert hidden"></div><div id="development-phase-track" class="development-phase-track"></div><div class="development-activity"><div><small>当前 Agent 行为</small><b id="development-current-activity">尚未开始执行</b><p id="development-activity-detail">批准方案后会在这里实时展示执行动作。</p></div><div id="development-runtime-metrics" class="development-runtime-metrics"></div></div><details id="development-recent-details" class="development-recent-details"><summary>最近动态 <span id="development-recent-count">0</span></summary><div id="development-recent-events" class="development-recent-events"></div></details><div class="development-progress-actions"><button type="button" class="secondary hidden" id="progress-open-observability">查看完整调用链</button><button type="button" class="secondary hidden" id="progress-retry-button">重试当前步骤</button><button type="button" class="secondary hidden" id="progress-resume-button">从检查点继续</button><button type="button" class="secondary hidden" id="progress-pause-button">暂停执行</button></div></section>
                 <section id="development-steps-panel" class="panel development-steps-panel"><div class="development-panel-heading"><div class="section-title"><span>↳</span><div><h2>开发步骤</h2><p id="development-step-summary">按批准方案串行执行</p></div></div><button type="button" class="secondary" id="open-current-diff-button">查看文件对比</button></div><div id="development-steps" class="development-steps"></div></section>
                 <section id="feedback-panel" class="panel feedback-panel hidden"><div class="section-title"><span>AI</span><div><h2>与 Agent 持续对话</h2><p>在当前工作区继续调整代码</p></div></div><div id="chat-messages" class="chat-messages"></div><div class="chat-composer"><textarea id="code-feedback" rows="3" placeholder="描述哪里不符合要求…"></textarea><button type="button" class="secondary" id="rollback-feedback-button">撤销上一轮</button><button id="continue-development-button">发送 <b>→</b></button></div></section>
                 <div id="development-placeholder" class="panel empty-state"><div class="radar"></div><h2>等待开发开始</h2><p>批准技术方案后，这里将出现 Agent 对话。</p></div>
@@ -140,6 +141,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
-    <script src="/assets/app.js?v=48"></script>
+    <script src="/assets/app.js?v=50"></script>
   </body>
 </html>

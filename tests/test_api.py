@@ -102,6 +102,15 @@ class ApiTests(unittest.TestCase):
                     self.assertIn("execution_queued", event_types)
                     self.assertIn("execution_started", event_types)
                     self.assertEqual(event_types[-1], "execution_finished")
+                    progress = client.get(f"/api/tasks/{task['id']}/progress")
+                    self.assertEqual(progress.status_code, 200)
+                    self.assertEqual(progress.json()["job"]["id"], job["id"])
+                    self.assertEqual(
+                        progress.json()["events"][-1]["event_type"],
+                        "execution_finished",
+                    )
+                    self.assertTrue(progress.json()["trace"])
+                    self.assertTrue(progress.json()["spans"])
                     checkpoints = client.get(
                         f"/api/tasks/{task['id']}/checkpoints"
                     ).json()

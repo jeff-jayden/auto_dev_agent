@@ -248,6 +248,28 @@ def get_events(task_id: str):
     return orchestrator.store.list_events(task_id)
 
 
+@app.get("/api/tasks/{task_id}/progress")
+def get_task_progress(task_id: str):
+    """Return the live execution projection used by the development workspace."""
+    task = orchestrator.store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    jobs = orchestrator.store.list_jobs(task_id)
+    traces = orchestrator.store.list_traces(task_id, limit=1)
+    latest_trace = traces[0] if traces else None
+    return {
+        "task_id": task_id,
+        "job": jobs[0] if jobs else None,
+        "checkpoints": orchestrator.store.list_checkpoints(task_id),
+        "events": orchestrator.store.list_events(task_id),
+        "trace": latest_trace,
+        "spans": (
+            orchestrator.store.list_spans(latest_trace.id)
+            if latest_trace is not None else []
+        ),
+    }
+
+
 @app.get("/api/tasks/{task_id}/recovery")
 def diagnose_task_recovery(task_id: str):
     try:
