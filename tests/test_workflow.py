@@ -203,7 +203,7 @@ diff --git a/index.js b/index.js
                     summary="发现未授权删除",
                     findings=[ReviewFinding(
                         severity="medium",
-                        category="functionality",
+                        category="acceptance/functionality",
                         file="task_service.py",
                         message="原有任务字段被需求外删除。",
                         suggestion="使用 Git 基线恢复候选片段。",
@@ -219,6 +219,8 @@ diff --git a/index.js b/index.js
         restored = orchestrator._restore_review_baseline_deletions(task, review)
 
         self.assertEqual(review.baseline_restore_ids, [selected["id"]])
+        self.assertEqual(review.decision, "changes_requested")
+        self.assertTrue(review.findings[0].blocking)
         self.assertEqual(restored[0]["original_text"], selected["original_text"])
         self.assertEqual(target.read_text(encoding="utf-8"), BASE_SERVICE)
         self.assertTrue(gateway.candidates)
@@ -245,6 +247,37 @@ diff --git a/index.js b/index.js
                 task.technical_plan.affected_files,
                 [candidate_id],
             )
+
+    def test_baseline_restore_selection_cannot_be_approved_without_blocking_finding(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "强制恢复后复审", "如果 Reviewer 选中 Git 基线恢复片段，本轮审查不能直接批准。"
+        )
+        task = orchestrator.approve(task.id, "tester", "方案可执行")
+        workspace = Path(task.workspace)
+        target = workspace / "task_service.py"
+        target.write_text("def create_task(title: str):\n    pass\n", encoding="utf-8")
+        task.result.diff = orchestrator.workspace_manager.diff(workspace)
+        candidates = orchestrator._baseline_deletion_candidates(task)
+
+        class RestoreOnlyGateway:
+            enabled = True
+
+            def generate_structured(self, system_prompt, user_prompt, output_model):
+                return ReviewerModelOutput(
+                    summary="需要恢复 Git 基线片段",
+                    findings=[],
+                    baseline_restore_ids=[candidates[0]["id"]],
+                )
+
+        orchestrator.code_review_agent.model_gateway = RestoreOnlyGateway()
+        review = orchestrator.code_review_agent.review(
+            task, 2, baseline_deletion_candidates=candidates
+        )
+
+        self.assertEqual(review.decision, "changes_requested")
+        self.assertTrue(any(item.blocking for item in review.findings))
+        self.assertIn("Git 基线", review.findings[-1].message)
 
     def test_reject_stops_before_development(self):
         orchestrator = build_orchestrator(self.runtime)

@@ -60,10 +60,16 @@ class CodeReviewAgent:
         for finding in findings:
             finding.severity = finding.severity.lower()
             category = finding.category.lower().strip()
+            category_parts = {
+                part for part in re.split(r"[/|,>\s]+", category) if part
+            }
             finding.blocking = (
                 finding.blocking
                 or finding.severity in self.BLOCKING_SEVERITIES
-                or (finding.severity == "medium" and category in self.CORE_BLOCKING_CATEGORIES)
+                or (
+                    finding.severity == "medium"
+                    and bool(category_parts & self.CORE_BLOCKING_CATEGORIES)
+                )
             )
             key = (finding.file, finding.line, finding.category, finding.message)
             if key not in seen:
@@ -71,6 +77,22 @@ class CodeReviewAgent:
                 normalized.append(finding)
 
         blocking = [item for item in normalized if item.blocking]
+        if baseline_restore_ids and not blocking:
+            selected_candidates = {
+                item["id"]: item for item in (baseline_deletion_candidates or [])
+                if item["id"] in baseline_restore_ids
+            }
+            files = sorted({item["file"] for item in selected_candidates.values()})
+            restoration_finding = ReviewFinding(
+                severity="medium",
+                category="acceptance",
+                file=files[0] if len(files) == 1 else None,
+                message="Reviewer 已确认存在需求未授权的删除，必须先从 Git 基线恢复对应片段。",
+                suggestion="应用已选择的基线恢复片段，然后重新测试并再次审查。",
+                blocking=True,
+            )
+            normalized.append(restoration_finding)
+            blocking.append(restoration_finding)
         decision = "changes_requested" if blocking else "approved"
         summary = (
             f"发现 {len(blocking)} 个阻塞问题，需要修复后重新审查。"
