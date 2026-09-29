@@ -1,221 +1,356 @@
-# AI Dev Agent — 第七阶段
+# AI Dev Agent
 
-这是一个可运行的研发 Agent 纵向切片，当前支持：
+_一个可暂停、可恢复、可审计，并由人工 Gate 控制最终交付的软件研发 Agent 平台。_
 
-1. 注册允许目录内的本地 Git 仓库
-2. 使用只读工具识别语言、框架、分支、基线 SHA、入口和测试命令
-3. 生成带文件和行号证据的需求分析与技术方案
-4. 对方案执行批准、拒绝或要求修改
-5. 真实仓库审批后保持只读并进入 `plan_approved`
-6. 审批后从真实 Git 仓库基线创建隔离 Worktree，修改代码、执行测试并生成 Diff/MR 描述
-7. 真实仓库审批后从规划基线创建 Git Worktree，不修改原始工作目录
-8. Developer Agent 只能修改技术方案内文件，现有文件优先使用精确搜索/替换，由系统生成 Git Diff；新文件兼容 unified diff
-9. 只执行仓库分析阶段批准的测试命令，失败后最多自动修复三次
-10. 部署、CI 和数据库迁移等高风险路径会暂停等待人工审批
-11. 测试通过后自动生成包含验收清单、风险、回滚方案和 Change Log 的本地 MR 草稿
-12. 独立 Reviewer Agent 结合确定性规则和模型审查生成带文件、行号和严重度的 CR
-13. high / critical 问题会阻塞流程并触发最多三轮自动修复、测试和重新审查
-14. CR 通过后进入 waiting_release_approval，当前阶段不会直接发布线上
-15. 方案审批以持久化 Job 入队，API 使用 202 立即返回，不再占用请求直到开发完成
-16. 单 Worker 后台执行开发链路，Job 状态、重试次数、错误和结果状态写入 SQLite
-17. 相同任务的重复审批会返回同一个活动 Job，防止重复执行
-18. 服务重启时恢复未完成 Job；已请求取消的 Job 会保持取消，不会被错误重跑
-19. SSE 实时推送任务审计事件，前端同时轮询 Job 状态并展示排队、执行、失败或完成状态
-20. 排队 Job 可立即取消；运行中 Job 使用协作式暂停，在下一个安全检查点进入 paused
-21. 已取消或暂停 Job 可以创建关联的 resume Job，并校验方案、基线、Worktree 与 Diff 后继续
-22. 持久化五类恢复检查点：plan_approved、proposal_ready、patch_applied、test_result_saved、review_round_saved
-23. 自动识别 GitHub origin，在人工 Gate 后只向 agent/* 分支提交和推送
-24. 使用 GitHub API 创建 Draft Pull Request，并同步本地 Code Review 摘要
-25. 用户再次确认后将 Draft 转为 Ready，并使用已审核 head SHA 执行 squash merge
-26. GitHub PR 创建、评论和合入均保留任务事件，失败时回到可重试的人工作业状态
-27. 每次规划、后台执行、检查点 Dry Run 和 Golden Case 评测都会生成独立 Trace
-28. Trace 内使用父子 Span 展示 Agent、LLM 和工具调用，记录耗时、状态、模型与 Token 估算
-29. Trace 属性进入 SQLite 前会递归脱敏 token、secret、password、authorization 等字段
-30. 任意持久化检查点可做只读 Dry Run，验证方案哈希、基线、Worktree 和 Diff，不修改代码
-31. 内置 5 个无模型、无写仓库的 Golden Cases，并在页面展示成功率、耗时和调用量指标
-32. 文本替换在写盘前校验完整代码块边界，拒绝“局部块头替换为完整块”造成的尾部重复
-33. CSS 修改执行结构校验；React 测试通过后自动执行仓库已有的 build 脚本
-34. CR 会阻塞 CSS 结构错误、入口绕过 App、缺少 React 行为测试和 medium 级核心验收缺失
-35. Git Diff 使用按文件折叠、双行号、hunk 和增删着色的 GitHub 风格视图
-36. 任务恢复协调器会核对 Task、活动 Job、最近检查点、仓库基线、Worktree 和 Diff
-37. 执行状态异常但检查点有效时，任务顶部展示可解释的恢复卡和诊断抽屉
-38. 用户确认后创建幂等 resume Job，从最近安全检查点继续，不重复已完成步骤
-39. 方案、基线、工作区或 Diff 漂移时禁止自动恢复，并明确展示阻塞原因
-40. Worker 领取 Job 时写入唯一 worker_id、当前阶段、心跳时间和 90 秒执行租约
-41. 长时间模型与测试调用期间由独立心跳线程续租，服务重启只回收租约已过期的 Job
-42. 恢复中心区分正常运行与 Worker 失联，并展示当前步骤、最后心跳和租约诊断
-43. 用户确认恢复时原子地废弃旧 Job 并创建唯一 resume Job，旧 Worker 后续结果会被隔离
-44. 新建任务可绑定 Figma Frame、实现预览 URL 与验收视口，并通过 Figma MCP 固定设计上下文、变量和参考图
-45. 开发完成后使用本机 Chrome/Edge 渲染实现页面，保存 DOM、实现截图、视觉差异图和相似度
-46. CR 页面展示结构、浏览器和视觉验收证据；浏览器渲染失败会阻塞 PR，像素偏差仅提示
-47. Developer 在生成修改前运行有界的只读工具循环，可自主选择文本/符号/引用搜索、分段读文件和 Git 历史
-48. 上下文探索最多执行 4 步且禁止写文件、运行 Shell 或扩大审批范围；写入、测试与发布仍由确定性流程控制
-49. LangGraph Checkpointer 是任务阶段、恢复位置和待人工动作的执行状态源，`Task.status` 仅作为 API/UI 投影
-50. Developer 的上下文准备、方案应用、测试和失败修复使用条件图编排，测试失败会沿图边进入下一轮
-51. Code Review 的审查、自动修复、MR 重生成和再次审查使用独立子图，保留最多三轮边界
-52. 需求、风险、发布和合入审批使用持久化 interrupt，用户操作通过 resume 恢复；Worker 只按 Graph 检查点恢复任务
-53. 仓库上下文使用关键词/符号匹配与轻量语义向量的加权 RRF 融合，依赖图继续补齐调用方、被调用方和测试
-54. Golden Evaluation 同时运行固定代码检索集，对比旧关键词基线与混合 RAG 的 Recall@K、MRR、Hit@K、无关文件率和上下文规模
-55. 顶层 `TaskDeliveryGraph` 编排任务创建、仓库分析、Plan Agent、人工方案审批、Developer Agent、MR 生成与 Reviewer Agent；Orchestrator 只保留命令入口和节点依赖适配
+---
 
-对于 React/CRA 项目，分析器会优先选择 `App`、对应测试和样式文件，使用非交互测试参数，并在隔离 Worktree 中复用原仓库已有的 `node_modules`，避免测试进入 watch 模式或因依赖目录未复制而失败。
+## 📋 项目定位
 
-没有模型 Key 时仍可完成真实仓库分析和确定性方案兜底，但代码开发必须配置 OpenAI-compatible 模型；没有模型时任务会明确失败，不会伪造代码结果。模型输出如果无效、引用方案外文件或请求未批准命令，也会被执行层拒绝。系统不再自动注册示例仓库，新环境需要先添加 GitHub 或本地 Git 仓库。
+AI Dev Agent 把一条真实的软件需求拆成可控的交付流程：读取仓库、分析需求、生成技术方案、隔离开发、执行测试、代码审查、创建 GitHub Pull Request，最终由用户决定是否合入。
 
-Developer 的只读上下文工具循环默认对内置模型网关启用，可通过 `DEVELOPER_CONTEXT_TOOLS_ENABLED=false` 关闭，或使用 `DEVELOPER_CONTEXT_MAX_STEPS=1..8` 调整最大探索步数。工具使用 LangChain `StructuredTool` 与 Pydantic 输入 Schema 统一注册和调用；LangGraph 负责编排、状态、检查点和人工中断，项目自己的 ToolPolicy 与服务层继续控制 Git 写入、测试命令和 GitHub 发布边界。
+它不是“让模型一次性生成代码”的 Demo，而是一套围绕 Agent 构建的研发工作台：**模型负责理解、决策和生成，LangGraph 负责流程编排，确定性工具负责执行，人工审批负责关键边界**。
 
-## LangGraph 状态边界
+| 项目属性 | 当前实现 |
+| --- | --- |
+| **后端** | Python 3.12+、FastAPI、Pydantic |
+| **Agent 编排** | LangGraph、LangChain `create_agent`、`@tool` |
+| **模型接入** | DeepSeek、Ollama、OpenAI-compatible API |
+| **持久化** | SQLite、LangGraph SQLite Checkpointer |
+| **代码执行** | Git Worktree、受控 Patch、仓库测试命令 |
+| **代码交付** | GitHub Draft PR、评论同步、人工合入 |
+| **前端** | 原生 HTML/CSS/JavaScript、Monaco Diff Editor |
+| **质量保障** | 规则审查、模型审查、Golden Cases、混合 RAG 评测 |
 
-- `WorkflowStateStore`：唯一的工作流执行状态，SQLite Checkpointer 按 `task_id` 持久化阶段、版本、检查点和 interrupt。
-- `Task.status`：为了兼容现有 API 和页面保留的读模型，由 Graph 状态完成后投影，不负责决定下一步。
-- `ExecutionJob`：Worker 的队列、租约、心跳和重试记录，描述“谁在执行”，不描述业务流程走到哪里。
-- `task_checkpoints`：继续为历史列表和 Dry Run 提供只读投影；恢复执行只读取 LangGraph 中的最新检查点。
-- Developer 与 Code Review：分别作为条件子图运行；模型负责提出方案或审查意见，图控制循环、上限和人工 Gate。
+> 📌 **核心原则：** Agent 可以自主探索和提出修改，但不能绕过批准范围、测试、审查、发布与合入 Gate。
 
-### 顶层交付图
+## 🎯 核心能力
+
+| 能力 | 解决的问题 | 主要实现 |
+| --- | --- | --- |
+| **仓库理解** | 避免模型凭空猜测文件和调用关系 | 仓库事实扫描、符号索引、依赖图、混合 RAG |
+| **多 Agent 协作** | 将规划、开发和审查职责分离 | Plan、Repository Exploration、Developer、Reviewer Agent |
+| **自主工具调用** | 按问题需要补充上下文 | `search_text`、`search_symbol`、`find_references`、`read_file`、`git_history` |
+| **受控代码修改** | 防止越权修改和 Patch 污染 | 文件范围、ToolPolicy、结构校验、Git 基线恢复 |
+| **测试与自动修复** | 让失败形成闭环 | Apply → Test → Diagnose → Repair，最多三轮 |
+| **独立代码审查** | 防止“开发 Agent 自己证明自己正确” | 确定性规则与 LLM Review 双重检查 |
+| **暂停与恢复** | 支持长任务中断、进程退出和人工暂停 | Job 租约、心跳、五类检查点、恢复诊断 |
+| **可观测性** | 回答 Agent 做了什么、为何失败 | Trace、Span、模型/工具调用、Token、实时任务时间线 |
+| **GitHub 交付** | 将本地修改变成可审核成果 | `agent/*` 分支、Draft PR、Review Comment、人工 Merge |
+| **UI 验收** | 对页面需求补充可视化证据 | Figma MCP、浏览器截图、DOM 与视觉差异报告 |
+
+当前属于**顺序协作型 Multi-Agent**：各 Agent 按交付阶段接力，Developer 与 Reviewer 内部允许有界循环，但不会无约束地并行修改同一工作区。
+
+## 🔄 交付流程
+
+一条需求从创建到合入会经过以下主链路。测试失败回到开发修复，审查发现阻塞问题也回到开发；发布 PR 和合入始终需要人工操作。
 
 ```mermaid
 flowchart LR
-    API[API / Worker 命令] --> O[TaskOrchestrator 薄入口]
-    O --> G[TaskDeliveryGraph]
-    G --> C[创建任务]
-    C --> A[仓库分析]
-    A --> P[Plan Agent]
-    P --> H{人工审批}
-    H -->|批准| D[Developer Agent 子图]
-    H -->|拒绝| X[结束]
-    D -->|测试通过| M[生成 MR 草稿]
-    D -->|高风险| R{风险审批}
-    D -->|失败/暂停| S[检查点 / 恢复入口]
-    M --> V[Reviewer Agent 子图]
-    V -->|通过| U[等待发布审批]
-    V -->|需修改| D
+    accTitle: AI Dev Agent 交付流程
+    accDescr: 展示需求从仓库检索和技术方案开始，经过人工审批、开发测试与代码审查，最终发布并合入 GitHub Pull Request 的完整链路
+
+    requirement([📋 创建需求]) --> context[🔍 检索仓库上下文]
+    context --> plan[🧠 生成技术方案]
+    plan --> approval{👤 方案批准?}
+    approval -->|批准| develop[🔧 隔离开发]
+    approval -->|退回| plan
+    develop --> test{🧪 测试通过?}
+    test -->|失败| develop
+    test -->|通过| review{🔍 审查通过?}
+    review -->|需修改| develop
+    review -->|通过| release[👤 发布审批]
+    release --> pull_request[📤 创建 Draft PR]
+    pull_request --> merge([✅ 人工合入])
+
+    classDef human fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
+    classDef process fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a5f
+    classDef success fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+
+    class approval,release human
+    class context,plan,develop,test,review,pull_request process
+    class merge success
 ```
 
-`TaskDeliveryGraph` 决定主链路中的下一个节点，Developer 和 Reviewer 子图决定各自内部的工具循环与修复循环。`TaskOrchestrator` 不再手写正常交付顺序，只负责把 API 参数变成图输入，并向节点注入数据库、Git、模型、工作区和 GitHub 等基础设施能力。风险、暂停恢复、发布与合入仍是显式人工命令入口，并通过 `WorkflowStateStore` 的 interrupt/checkpoint 与同一任务状态关联。
+流程中的责任边界如下：
 
-## 混合 RAG 与评测
+1. **需求阶段**：收集仓库事实，生成需求分析、验收标准和技术方案
+2. **开发阶段**：创建隔离 Worktree，Developer Agent 探索上下文并按步骤修改、测试和修复
+3. **CR 阶段**：展示累计 Diff、测试证据、MR 描述和 Review Finding
+4. **交付阶段**：用户确认后创建 Draft PR，再由用户决定是否 Ready 和 Merge
 
-代码索引按 Git HEAD 缓存并增量更新。查询阶段并行执行旧关键词/符号召回和确定性的哈希语义向量召回，再使用加权 Reciprocal Rank Fusion 合并排名；首批文件确定后，继续沿 import、referenced_by、同名样式和测试关系扩展 Context Pack。该实现不依赖外部向量服务，适合本地演示，后续可以在不改变评测接口的情况下替换成 ChromaDB 或云端 Embedding。
+## ⚙️ 系统架构
 
-“运行 Golden + RAG 评测”会在同一组带标准文件答案的 Case 上分别调用 `strategy=lexical` 与 `strategy=hybrid`。页面展示前后指标和逐 Case 召回文件。内置 Case 只用于可重复回归，指标不能冒充真实生产数据；扩充仓库级标注集后才能用于简历中的正式效果数据。
+系统采用“Web/API + 后台 Job + LangGraph 状态机 + Agent/Tool + Git 工作区”的分层设计。`TaskOrchestrator` 只负责命令入口和依赖适配，下一步执行哪个节点由 `TaskDeliveryGraph` 及其条件边决定。
 
-## 启动
+```mermaid
+flowchart TB
+    accTitle: AI Dev Agent 系统架构
+    accDescr: 展示浏览器、FastAPI、后台 Worker、LangGraph、Agent 层、SQLite、Git Worktree 和外部集成之间的关系
+
+    web([👤 Web 工作台]) --> api[🌐 FastAPI]
+    api --> worker[⚙️ Job Worker]
+    worker --> graph[🔄 LangGraph 工作流]
+    graph --> agents[🧠 Plan / Developer / Reviewer]
+    graph --> database[(💾 SQLite 与 Checkpointer)]
+    agents --> workspace[🔧 Git Worktree 与工具策略]
+    agents --> integrations[🔌 LLM / GitHub / Figma]
+    api --> database
+
+    classDef interface fill:#f3f4f6,stroke:#6b7280,stroke-width:2px,color:#1f2937
+    classDef engine fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a5f
+    classDef data fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+
+    class web,api interface
+    class worker,graph,agents engine
+    class database,workspace data
+```
+
+| 层 | 职责 | 核心代码 |
+| --- | --- | --- |
+| **交互层** | 三阶段工作台、实时进度、Diff、审查与发布操作 | `apps/web/` |
+| **API 层** | 参数校验、HTTP/SSE 接口、依赖装配 | `apps/api/main.py` |
+| **执行层** | Job 领取、租约、心跳、取消和恢复 | `src/execution/worker.py` |
+| **编排层** | 顶层交付图、状态迁移、人工中断、检查点 | `src/workflows/` |
+| **Agent 层** | 规划、上下文探索、开发、审查和 MR 生成 | `src/agents/` |
+| **工具层** | 文件读取、搜索、Patch、测试和策略约束 | `src/tools/` |
+| **基础设施层** | SQLite、GitHub、Worktree、模型与 Trace | `src/infrastructure/`、`src/scm/`、`src/sandbox/`、`src/llm/` |
+
+## 👥 Agents 与上下文
+
+### Agent 分工
+
+| Agent | 输入 | 自主行为 | 输出 |
+| --- | --- | --- | --- |
+| **RequirementPlanningAgent** | 需求、仓库事实、设计上下文 | 调用只读规划工具，确定影响文件和开发步骤 | 需求分析、技术方案、验收与风险 |
+| **RepositoryExplorationAgent** | 初始上下文、写入范围、失败或审查反馈 | 在最多 1～8 步内自主选择只读工具 | 补充后的代码上下文与工具审计 |
+| **CodeDevelopmentAgent** | 已批准方案、当前工作区、上下文 | 生成修改、应用 Patch、运行测试、诊断并修复 | Development Attempts、Diff、测试结果 |
+| **CodeReviewAgent** | 需求、方案、累计 Diff、测试证据 | 执行规则审查和模型审查，选择基线恢复项 | Review Round、Finding、是否阻塞 |
+
+### 上下文工程
+
+系统没有把整个仓库直接塞给模型，而是按阶段组织上下文：
+
+| 上下文层 | 内容 | 使用场景 |
+| --- | --- | --- |
+| **仓库事实** | 语言、框架、Git HEAD、入口、测试命令 | 创建任务和生成方案 |
+| **混合 RAG** | 关键词/符号召回、本地语义向量、RRF 融合、依赖扩展 | 筛选核心、依赖和测试文件 |
+| **自主探索** | 文本、符号、引用、文件和 Git 历史 | Developer 判断初始上下文不足时 |
+| **修复上下文** | 上次失败、测试输出、当前 Diff、Review Finding | 测试修复、CR 修复和用户继续对话 |
+| **Git 基线** | 原始代码片段与删除候选 | 恢复需求未授权删除，避免模型重新编造旧代码 |
+
+当前语义检索使用确定性的本地哈希向量，不依赖额外 Embedding 服务；可以在保持评测接口不变的前提下替换为外部 Embedding 与向量数据库。
+
+## 💾 状态、任务与恢复
+
+系统把“业务走到哪一步”和“后台由谁执行”分开记录：
+
+| 对象 | 表达的含义 | 状态来源 |
+| --- | --- | --- |
+| **LangGraph State** | 任务当前业务阶段、恢复位置、待人工动作 | SQLite Checkpointer，业务状态源 |
+| **Task** | API 和页面读取的任务投影 | Graph 状态迁移后同步 |
+| **ExecutionJob** | 某次批准、重试、恢复或审查由哪个 Worker 执行 | SQLite Job 队列 |
+| **TaskCheckpoint** | 可展示、回放和恢复的安全节点 | Graph 检查点投影 |
+
+```mermaid
+stateDiagram-v2
+    accTitle: 任务业务状态生命周期
+    accDescr: 展示任务从需求分析到开发测试、代码审查、发布审批和最终合入的状态变化，以及失败后的修复循环
+
+    [*] --> RequirementAnalysis: 📋 创建任务
+    RequirementAnalysis --> WaitingPlanApproval: 🧠 方案已生成
+    WaitingPlanApproval --> Developing: ✅ 人工批准
+    Developing --> Testing: 🔧 修改已应用
+    Testing --> Developing: ❌ 测试失败
+    Testing --> Reviewing: ✅ 测试通过
+    Reviewing --> ChangesRequested: ❌ 发现阻塞问题
+    ChangesRequested --> Developing: 🔄 自动或人工修复
+    Reviewing --> WaitingReleaseApproval: ✅ 审查通过
+    WaitingReleaseApproval --> WaitingMergeApproval: 📤 发布 PR
+    WaitingMergeApproval --> Merged: ✅ 人工合入
+    Merged --> [*]: 🏁 完成
+```
+
+开发链路持久化五类安全检查点：
+
+| 检查点 | 已完成内容 | 恢复后继续执行 |
+| --- | --- | --- |
+| `plan_approved` | 技术方案已批准 | 创建或校验隔离工作区 |
+| `proposal_ready` | 本轮修改方案已生成 | 应用修改 |
+| `patch_applied` | 修改已写入 Worktree | 运行测试 |
+| `test_result_saved` | 测试结果已保存 | 修复失败或生成 MR |
+| `review_round_saved` | 审查轮次已保存 | 修复 Finding 或等待人工决策 |
+
+Worker 默认每 10 秒更新一次心跳，并持有 90 秒执行租约。进程退出后心跳停止，恢复协调器只会接管租约已过期且检查点有效的 Job；继续执行前还会校验方案、仓库 HEAD、Worktree 和 Diff 是否漂移。
+
+## 🚀 快速开始
+
+### 前置条件
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | 3.12+ | API、Agent 和 Worker |
+| Git | 可执行命令行 | 仓库分析、Worktree、Diff 和提交 |
+| Chrome 或 Edge | 可选 | UI 截图验收 |
+| Ollama 或模型 API Key | 开发阶段必需 | 规划、开发和审查模型调用 |
+| GitHub Token | 可选 | 发布和合入 Pull Request |
+
+### 安装
 
 ```powershell
-cd E:\aiTraval\ai-dev-agent
-$env:PYTHONPATH="src"
-python -m uvicorn apps.api.main:app --reload
+git clone https://github.com/jeff-jayden/auto_dev_agent.git
+cd auto_dev_agent
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+
+Copy-Item .env.example .env
 ```
 
-打开 <http://127.0.0.1:8000>。页面已经预填了示例需求，创建任务后先检查需求分析和技术方案，再点击“批准并执行开发”。
+编辑 `.env`，至少配置可用模型。以 DeepSeek 为例：
 
-默认只允许注册 `E:\aiTraval` 下的仓库。可通过环境变量追加允许根目录：
-
-```powershell
-$env:AGENT_ALLOWED_REPOSITORY_ROOTS="D:\projects;E:\work"
+```dotenv
+MODEL_PROVIDER=deepseek
+MODEL_NAME=deepseek-flash
+MODEL_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=your_deepseek_api_key
+MODEL_TIMEOUT_SECONDS=180
+AGENT_ALLOWED_REPOSITORY_ROOTS=E:\projects
 ```
 
-可选的 Ollama 配置：
+> ⚠️ **安全提示：** `.env` 已被 Git 忽略。不要把真实 API Key 或 GitHub Token 写入 README、源码、Issue 或提交记录。
 
-```powershell
-$env:MODEL_PROVIDER="ollama"
-$env:MODEL_NAME="qwen3:4b"
-$env:MODEL_BASE_URL="http://127.0.0.1:11434/v1"
-$env:MODEL_TIMEOUT_SECONDS="240"
-```
-
-本机已安装 Ollama 时，也可以直接使用启动脚本：
-
-```powershell
-.\scripts\start-ollama.ps1
-```
-
-需要从项目根目录的本地 `.env` 同时加载模型和 GitHub 配置时，使用：
+### 启动
 
 ```powershell
 .\scripts\start-local.ps1
 ```
 
-`.env` 已被 Git 忽略，真实密钥只保存在本机，不要复制到源码或提交记录中。
-
-可选的 Figma Desktop MCP 配置：
+打开 <http://127.0.0.1:8765>，或检查健康状态：
 
 ```powershell
-$env:FIGMA_MCP_URL="http://127.0.0.1:3845/mcp"
+Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
-在 Figma 桌面端 Dev Mode 中启用 MCP 后，创建任务时粘贴具体 Frame 链接（必须包含 `node-id`）。如果同时填写本地预览 URL，开发完成后会自动使用 Chrome/Edge 执行截图验收；未填写时只保存设计基线，不会伪造浏览器验收结果。
+首次使用时：
 
-GitHub API 配置：
+1. 在“需求”页面通过 GitHub 地址或本地目录注册仓库
+2. 新建任务并填写标题、需求描述和目标仓库
+3. 核对仓库事实、需求分析、影响文件和技术方案
+4. 批准方案后，在“开发”页面观察实时进度、Agent 对话和累计 Diff
+5. 在“代码 CR”页面处理 Finding，确认后发布 Draft PR
+
+如果使用本地 Ollama，可直接运行 `scripts/start-ollama.ps1`；该脚本默认连接 `http://127.0.0.1:11434/v1`。
+
+## 🔧 配置
+
+| 环境变量 | 必需 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `MODEL_PROVIDER` | 是 | `disabled` | `deepseek`、`ollama`、`openai` 或 `openai_compatible` |
+| `MODEL_NAME` | 是 | 按 Provider | 模型名称 |
+| `MODEL_BASE_URL` | 否 | 按 Provider | OpenAI-compatible API 地址 |
+| `MODEL_API_KEY` | 按 Provider | 空 | 通用模型 API Key |
+| `DEEPSEEK_API_KEY` | DeepSeek | 回退到 `MODEL_API_KEY` | DeepSeek API Key |
+| `MODEL_TIMEOUT_SECONDS` | 否 | `90`～`240` | 单次模型调用超时 |
+| `AGENT_ALLOWED_REPOSITORY_ROOTS` | 本地仓库 | 项目父目录 | 允许注册的本地仓库根目录，Windows 使用分号分隔 |
+| `GITHUB_TOKEN` | 发布 PR | 空 | 建议使用只授权目标仓库的 Fine-grained PAT |
+| `GITHUB_API_URL` | 否 | `https://api.github.com` | GitHub API 地址 |
+| `FIGMA_MCP_URL` | UI 验收 | 空 | Figma Desktop MCP 地址 |
+| `DEVELOPER_CONTEXT_TOOLS_ENABLED` | 否 | `true` | 是否启用 Developer 自主上下文探索 |
+| `DEVELOPER_CONTEXT_MAX_STEPS` | 否 | `4` | 单轮只读探索步数，限制为 1～8 |
+
+运行数据写入 `runtime/`：
+
+- `runtime/agent.db`：Task、Job、Event、Trace、Evaluation 与 LangGraph Checkpoint
+- `runtime/repositories/`：通过远端地址注册的仓库
+- `runtime/tasks/{task_id}/repo`：任务隔离 Worktree
+- `runtime/indexes/`：按仓库和 Git HEAD 缓存的代码索引
+- `runtime/ui-acceptance/`：UI 验收截图与差异证据
+
+这些内容均属于本地运行状态，不应提交到 Git。
+
+## 📚 项目结构
+
+```text
+ai-dev-agent/
+├── apps/
+│   ├── api/main.py                 # FastAPI、路由、依赖装配与 Worker 生命周期
+│   └── web/                        # 三阶段工作台和 Monaco Diff 界面
+├── src/
+│   ├── agents/                     # 规划、探索、开发、审查与 MR Agent
+│   ├── code_intelligence/          # Git-aware 索引、混合 RAG 和依赖扩展
+│   ├── domain/                     # Task、Plan、Job、Review、Trace 等领域模型
+│   ├── evaluation/                 # Golden Cases 与检索指标评测
+│   ├── execution/                  # 后台 Worker、租约、心跳和恢复执行
+│   ├── infrastructure/             # SQLite 持久化
+│   ├── llm/                        # 多 Provider 模型网关
+│   ├── observability/              # Trace、Span 和脱敏
+│   ├── repository/                 # 仓库注册、克隆和事实分析
+│   ├── sandbox/                    # Git Worktree 隔离工作区
+│   ├── scm/                        # GitHub API、分支、PR 和合入
+│   ├── tools/                      # Developer 工具与 ToolPolicy
+│   ├── workflows/                  # 顶层 LangGraph、Orchestrator 和恢复协调器
+│   └── ui_validation.py            # Figma MCP 与浏览器 UI 验收
+├── scripts/                        # 本地和 Ollama 启动脚本
+├── tests/                          # 单元与集成测试
+├── .env.example                    # 无密钥的配置模板
+├── pyproject.toml                  # 包信息与依赖
+└── TODO.md                         # 暂缓功能与后续计划
+```
+
+关键入口：
+
+- `apps/api/main.py`：启动服务并构造所有依赖
+- `src/workflows/workflow_graph.py`：唯一业务状态源与顶层交付图
+- `src/workflows/orchestrator.py`：把 API/Worker 命令适配为 Graph 输入
+- `src/execution/worker.py`：异步执行 Job 并维护心跳租约
+- `src/agents/code_development_agent.py`：开发、测试和修复子图
+- `src/agents/code_review_agent.py`：审查和修复子图
+
+## ✅ 测试、API 与当前边界
+
+### 运行测试
 
 ```powershell
-$env:GITHUB_TOKEN="github_pat_..."
-$env:GITHUB_API_URL="https://api.github.com"
+python -m pytest -q
 ```
 
-Token 建议使用只授权目标仓库的 Fine-grained PAT。HTTPS Git Push 通过子进程临时环境注入认证 Header；Token 不会被拼接到 Git 命令、写入 Git 配置或保存到任务数据库。
-启动脚本在未设置 `GITHUB_TOKEN` 时会使用掩码输入读取 Token，只保存在当前服务进程内存中。
+当前测试结果为 **107 passed**；测试集覆盖任务 API、仓库分析、上下文探索、分步开发、工具策略、后台 Job、恢复、GitHub 交付、可观测性、UI 验收和 LangGraph 工作流。
 
-## 测试
+### 主要 API
 
-```powershell
-cd E:\aiTraval\ai-dev-agent
-$env:PYTHONPATH="src"
-python -m unittest discover -s tests -v
-```
+启动后可访问 <http://127.0.0.1:8765/docs> 查看完整 OpenAPI 文档。
 
-## API
+| API 组 | 代表接口 | 用途 |
+| --- | --- | --- |
+| **仓库** | `POST /api/repositories` | 注册本地目录或远端 Git 仓库 |
+| **任务** | `POST /api/tasks` | 创建需求并生成方案 |
+| **开发** | `POST /api/tasks/{id}/approve` | 批准方案并创建后台 Job |
+| **反馈** | `POST /api/tasks/{id}/feedback` | 基于当前工作区继续对话和修改 |
+| **恢复** | `GET /api/tasks/{id}/recovery` | 诊断中断任务并恢复 |
+| **审查** | `POST /api/tasks/{id}/review/run` | 刷新工作区快照并重新审查 |
+| **交付** | `POST /api/tasks/{id}/pull-request/publish` | 创建 GitHub Draft PR |
+| **可观测性** | `GET /api/traces/{trace_id}` | 查看 Agent、LLM 和工具调用链 |
+| **实时状态** | `GET /api/tasks/{id}/stream` | 通过 SSE 订阅任务事件 |
+| **评测** | `POST /api/evaluations/run` | 运行 Golden Cases 与 RAG 对比评测 |
 
-第五阶段新增异步执行接口：
+### 当前边界
 
-- `POST /api/tasks/{task_id}/approve`：将审批执行加入队列，返回 HTTP 202 和 ExecutionJob
-- `GET /api/jobs/{job_id}`：查询后台 Job 状态
-- `POST /api/jobs/{job_id}/cancel`：取消排队 Job 或请求取消运行中 Job
-- `POST /api/jobs/{job_id}/resume`：从被取消任务最近的安全阶段继续执行
-- `GET /api/tasks/{task_id}/jobs`：读取任务的执行记录
-- `GET /api/tasks/{task_id}/checkpoints`：读取任务的持久化检查点
-- `GET /api/tasks/{task_id}/recovery`：诊断任务是否中断以及能否安全恢复
-- `POST /api/tasks/{task_id}/recovery/resume`：人工确认后从最近安全检查点继续
-- `POST /api/tasks/{task_id}/ui-acceptance`：重新执行 Figma 与浏览器 UI 验收
-- `GET /api/tasks/{task_id}/ui-acceptance/image/{kind}`：读取 figma、implementation 或 diff 验收图片
-- `GET /api/tasks/{task_id}/stream`：通过 SSE 订阅任务事件
+- 后台执行器当前是单进程单 Worker，适合本地演示和单机开发，不是分布式调度系统
+- SQLite 同时承载业务数据和 Checkpointer；多实例部署前应迁移到共享数据库和队列
+- 混合 RAG 的语义向量是本地确定性实现，生产效果需要真实仓库标注集和正式 Embedding 模型验证
+- Figma MCP 依赖 Figma Desktop Dev Mode；未配置时不影响普通代码需求
+- 系统生成 Draft PR，但最终发布和合入仍由用户确认
+- 仓库当前未声明开源许可证，复制、分发或商用前应先补充许可证
 
-第六阶段新增 GitHub 接口：
+### 参考资料
 
-- `POST /api/tasks/{task_id}/pull-request/publish`：提交 agent/* 分支并创建 Draft PR
-- `GET /api/tasks/{task_id}/pull-request`：读取已保存的 GitHub PR
+- [LangGraph 文档](https://docs.langchain.com/oss/python/langgraph/overview)
+- [LangChain Agents 文档](https://docs.langchain.com/oss/python/langchain/agents)
+- [FastAPI 文档](https://fastapi.tiangolo.com/)
+- [GitHub Pull Requests REST API](https://docs.github.com/en/rest/pulls/pulls)
+- [Monaco Editor 文档](https://microsoft.github.io/monaco-editor/)
 
-第七阶段新增可观测性与回放接口：
+---
 
-- `GET /api/tasks/{task_id}/traces`：列出任务的规划、执行和回放 Trace
-- `GET /api/traces/{trace_id}`：读取 Trace 与父子 Span 调用链
-- `GET /api/metrics`：读取成功率、耗时、模型/工具调用和 Token 指标
-- `POST /api/tasks/{task_id}/checkpoints/{checkpoint_id}/replay`：只读校验检查点能否安全恢复
-- `POST /api/evaluations/run`：运行内置 Golden Cases
-- `GET /api/evaluations/latest`：读取最近一次评测结果
-- `POST /api/tasks/{task_id}/pull-request/refresh`：同步远端 PR 状态
-- `POST /api/tasks/{task_id}/pull-request/merge`：人工确认后将 Draft 转为 Ready 并合入
-
-MR 与审查接口：
-
-- GET /api/tasks/{task_id}/merge-request：读取结构化 MR 草稿
-- GET /api/tasks/{task_id}/reviews：读取逐轮 Code Review
-- POST /api/tasks/{task_id}/review/run：重新执行 Code Review
-- POST /api/tasks/{task_id}/review/approve：人工批准剩余 CR 风险
-- POST /api/tasks/{task_id}/release/reject：拒绝进入发布阶段
-
-- `POST /api/tasks`：创建任务并生成方案
-- `GET /api/tasks`：任务列表
-- `GET /api/tasks/{task_id}`：任务详情
-- `POST /api/tasks/{task_id}/reject`：拒绝方案
-- `POST /api/tasks/{task_id}/revise`：根据人工意见重生成方案
-- `POST /api/tasks/{task_id}/risk/approve`：批准高风险 Patch
-- `POST /api/tasks/{task_id}/risk/reject`：拒绝高风险 Patch
-- `GET /api/tasks/{task_id}/events`：审计事件
-- `GET /api/repositories`：仓库列表
-- `POST /api/repositories`：注册只读本地 Git 仓库
-- `GET /api/repositories/{id}/analysis`：执行只读仓库分析
-- `GET /health`：健康检查
-
-生成的工作区位于 `runtime/tasks/{task_id}/repo`，通过 Git Worktree 与原始仓库隔离，不会直接修改注册仓库的工作目录。
+_当前版本：`0.1.0` · 最后更新：2026-09-29_
