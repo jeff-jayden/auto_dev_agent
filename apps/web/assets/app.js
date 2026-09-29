@@ -339,6 +339,12 @@ function closeRecoveryDetails() {
   $("#recovery-drawer").classList.add("hidden");
 }
 
+function updateReviewStageBanner() {
+  const banner = $("#review-stage-banner");
+  const hasVisibleStage = [...banner.children].some((child) => !child.classList.contains("hidden"));
+  banner.classList.toggle("hidden", activeView !== "review" || !hasVisibleStage);
+}
+
 function renderReviewGate(task) {
   const repairing = task.status === "review_repairing";
   const visible = activeView === "review"
@@ -351,6 +357,7 @@ function renderReviewGate(task) {
   button.disabled = repairing;
   button.textContent = repairing ? "Review 正在执行…" : "重新审查";
   $("#approve-review-button").disabled = repairing;
+  updateReviewStageBanner();
 }
 
 function renderUIAcceptance(task) {
@@ -878,6 +885,7 @@ async function render(task) {
     $("#pull-request-link").href = pullRequest.url;
     $("#merge-pr-button").classList.toggle("hidden", task.status !== "waiting_merge_approval");
   }
+  updateReviewStageBanner();
   const githubComments = task.metadata.github_review_comments || [];
   $("#github-comments-panel").classList.toggle("hidden", !pullRequest);
   const githubCommentStatusLabels = {
