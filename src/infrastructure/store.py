@@ -37,6 +37,11 @@ class SQLiteTaskStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        """创建一次数据库连接，并在上下文成功结束时提交事务。
+
+        Yields:
+            已启用 ``sqlite3.Row`` 行工厂的 SQLite 连接。
+        """
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         try:
@@ -46,6 +51,7 @@ class SQLiteTaskStore:
             connection.close()
 
     def _initialize(self) -> None:
+        """创建任务运行所需的数据表和查询索引；已存在的结构保持不变。"""
         with self._connect() as connection:
             connection.executescript(
                 """
@@ -129,6 +135,14 @@ class SQLiteTaskStore:
             )
 
     def save_repository(self, repository: Repository) -> Repository:
+        """新增或更新一个已注册仓库。
+
+        Args:
+            repository: 待持久化的仓库领域对象。
+
+        Returns:
+            原仓库对象，便于调用方继续使用。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -150,6 +164,14 @@ class SQLiteTaskStore:
         return repository
 
     def get_repository(self, repository_id: str) -> Repository | None:
+        """按仓库 ID 查询仓库。
+
+        Args:
+            repository_id: 仓库唯一标识。
+
+        Returns:
+            找到的仓库；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM repositories WHERE id = ?", (repository_id,)
@@ -157,6 +179,7 @@ class SQLiteTaskStore:
         return Repository.model_validate_json(row["data"]) if row else None
 
     def list_repositories(self) -> list[Repository]:
+        """按创建时间升序返回所有已注册仓库。"""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT data FROM repositories ORDER BY created_at"
@@ -164,6 +187,14 @@ class SQLiteTaskStore:
         return [Repository.model_validate_json(row["data"]) for row in rows]
 
     def save_task(self, task: Task) -> Task:
+        """新增或更新任务快照。
+
+        Args:
+            task: 包含当前状态及完整业务数据的任务对象。
+
+        Returns:
+            原任务对象，便于调用方继续编排。
+        """
         serialized = task.model_dump_json()
         with self._connect() as connection:
             connection.execute(
@@ -188,16 +219,33 @@ class SQLiteTaskStore:
         return task
 
     def get_task(self, task_id: str) -> Task | None:
+        """按任务 ID 查询最新任务快照。
+
+        Args:
+            task_id: 任务唯一标识。
+
+        Returns:
+            找到的任务；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute("SELECT data FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return Task.model_validate_json(row["data"]) if row else None
 
     def list_tasks(self) -> list[Task]:
+        """按创建时间倒序返回所有任务，最新任务排在最前。"""
         with self._connect() as connection:
             rows = connection.execute("SELECT data FROM tasks ORDER BY created_at DESC").fetchall()
         return [Task.model_validate_json(row["data"]) for row in rows]
 
     def add_event(self, event: TaskEvent) -> TaskEvent:
+        """追加一条不可变的任务事件。
+
+        Args:
+            event: 待保存的时间线事件。
+
+        Returns:
+            已回填数据库自增 ID 的事件对象。
+        """
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -216,6 +264,14 @@ class SQLiteTaskStore:
         return event
 
     def list_events(self, task_id: str) -> list[TaskEvent]:
+        """按产生顺序返回指定任务的全部时间线事件。
+
+        Args:
+            task_id: 需要查询事件的任务 ID。
+
+        Returns:
+            按事件自增 ID 升序排列的事件列表。
+        """
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM task_events WHERE task_id = ? ORDER BY id", (task_id,)
@@ -233,6 +289,14 @@ class SQLiteTaskStore:
         ]
 
     def enqueue_job(self, job: ExecutionJob) -> ExecutionJob:
+        """将执行 Job 原子加入队列，并避免相同任务和动作重复入队。
+
+        Args:
+            job: 状态通常为 ``queued`` 的待执行 Job。
+
+        Returns:
+            新入队的 Job；若已有活动 Job，则返回已有 Job。
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -258,6 +322,15 @@ class SQLiteTaskStore:
         return job
 
     def get_active_job(self, task_id: str, action: str) -> ExecutionJob | None:
+        """查询指定任务动作当前尚未结束的 Job。
+
+        Args:
+            task_id: 任务唯一标识。
+            action: Job 动作类型，例如开发、审查或恢复。
+
+        Returns:
+            最早创建的活动 Job；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -271,6 +344,14 @@ class SQLiteTaskStore:
         return ExecutionJob.model_validate_json(row["data"]) if row else None
 
     def get_job(self, job_id: str) -> ExecutionJob | None:
+        """按 Job ID 查询执行记录。
+
+        Args:
+            job_id: 执行 Job 唯一标识。
+
+        Returns:
+            找到的 Job；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM execution_jobs WHERE id = ?", (job_id,)
@@ -278,6 +359,14 @@ class SQLiteTaskStore:
         return ExecutionJob.model_validate_json(row["data"]) if row else None
 
     def list_jobs(self, task_id: str | None = None) -> list[ExecutionJob]:
+        """按创建时间倒序查询执行 Job。
+
+        Args:
+            task_id: 可选任务 ID；提供时仅返回该任务的 Job。
+
+        Returns:
+            符合条件的 Job 列表，最新记录排在最前。
+        """
         with self._connect() as connection:
             if task_id:
                 rows = connection.execute(
@@ -291,6 +380,14 @@ class SQLiteTaskStore:
         return [ExecutionJob.model_validate_json(row["data"]) for row in rows]
 
     def save_job(self, job: ExecutionJob) -> ExecutionJob:
+        """更新一个已有 Job 的状态和完整数据快照。
+
+        Args:
+            job: 已包含最新执行状态的 Job。
+
+        Returns:
+            原 Job 对象。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -306,6 +403,15 @@ class SQLiteTaskStore:
         worker_id: str | None = None,
         lease_seconds: float = 90.0,
     ) -> ExecutionJob | None:
+        """原子领取队列中最早的 Job，并为 Worker 建立租约。
+
+        Args:
+            worker_id: 可选的 Worker 标识；提供后会记录心跳和租约过期时间。
+            lease_seconds: 本次 Worker 租约有效期，单位为秒。
+
+        Returns:
+            已切换为 ``running`` 的 Job；队列为空时返回 ``None``。
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -331,6 +437,15 @@ class SQLiteTaskStore:
 
     @staticmethod
     def job_lease_expired(job: ExecutionJob, now: datetime | None = None) -> bool:
+        """判断活动 Job 的 Worker 租约是否已经过期。
+
+        Args:
+            job: 待判断的执行 Job。
+            now: 可选的比较时间，主要用于测试；默认使用当前 UTC 时间。
+
+        Returns:
+            活动 Job 无租约或租约到期时返回 ``True``；非活动状态返回 ``False``。
+        """
         if job.status not in {"running", "pause_requested", "cancel_requested"}:
             return False
         if job.lease_expires_at is None:
@@ -344,7 +459,17 @@ class SQLiteTaskStore:
         current_stage: str,
         lease_seconds: float = 90.0,
     ) -> ExecutionJob | None:
-        """Extend a lease without reviving or overwriting an abandoned job."""
+        """刷新 Worker 心跳和租约，但不会复活或覆盖已被接管的 Job。
+
+        Args:
+            job_id: 正在执行的 Job ID。
+            worker_id: 发送心跳的 Worker ID，必须与当前租约持有者一致。
+            current_stage: Worker 当前执行阶段，用于恢复诊断和页面展示。
+            lease_seconds: 从本次心跳起延长的租约秒数。
+
+        Returns:
+            更新后的 Job；Job 不存在时返回 ``None``。Worker 不匹配或状态已结束时返回原快照。
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -371,7 +496,18 @@ class SQLiteTaskStore:
     def replace_stale_job_with_recovery(
         self, stale_job_id: str, recovery_job: ExecutionJob
     ) -> ExecutionJob:
-        """Fence an expired worker and create one recovery job atomically."""
+        """原子隔离心跳过期的 Worker，并创建唯一的恢复 Job。
+
+        Args:
+            stale_job_id: 已过期、需要标记为 ``abandoned`` 的原 Job ID。
+            recovery_job: 接续检查点执行的新恢复 Job。
+
+        Returns:
+            新建的恢复 Job；若任务已有活动恢复 Job，则返回已有记录。
+
+        Raises:
+            ValueError: 原 Job 不存在，或其 Worker 租约仍然有效。
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -421,6 +557,17 @@ class SQLiteTaskStore:
         self,
         has_checkpoint: Callable[[str], bool] | None = None,
     ) -> int:
+        """扫描并恢复因进程退出而遗留且租约已过期的 Job。
+
+        根据暂停请求、检查点和重试预算，将 Job 转为 ``paused``、``cancelled``、
+        ``failed`` 或重新放回 ``queued``。
+
+        Args:
+            has_checkpoint: 可选的检查点判定函数；默认查询任务的最新检查点。
+
+        Returns:
+            本次被恢复或终结的 Job 数量。
+        """
         checkpoint_exists = has_checkpoint or (
             lambda task_id: self.latest_checkpoint(task_id) is not None
         )
@@ -455,6 +602,17 @@ class SQLiteTaskStore:
         return recovered
 
     def request_job_cancel(self, job_id: str) -> ExecutionJob | None:
+        """请求取消或暂停一个尚未结束的 Job。
+
+        排队中的 Job 会直接取消；运行中的 Job 会进入 ``pause_requested``，等待
+        Worker 在安全检查点停止。
+
+        Args:
+            job_id: 目标执行 Job ID。
+
+        Returns:
+            更新后的 Job；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -477,6 +635,14 @@ class SQLiteTaskStore:
         return job
 
     def save_checkpoint(self, checkpoint: TaskCheckpoint) -> TaskCheckpoint:
+        """保存一个可用于暂停恢复的任务检查点。
+
+        Args:
+            checkpoint: 包含任务、Job、阶段及恢复数据的检查点。
+
+        Returns:
+            原检查点对象。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -495,6 +661,14 @@ class SQLiteTaskStore:
         return checkpoint
 
     def list_checkpoints(self, task_id: str) -> list[TaskCheckpoint]:
+        """按创建顺序返回指定任务的所有检查点。
+
+        Args:
+            task_id: 任务唯一标识。
+
+        Returns:
+            从最早到最新排列的检查点列表。
+        """
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT data FROM task_checkpoints WHERE task_id = ? ORDER BY created_at, rowid",
@@ -503,6 +677,14 @@ class SQLiteTaskStore:
         return [TaskCheckpoint.model_validate_json(row["data"]) for row in rows]
 
     def latest_checkpoint(self, task_id: str) -> TaskCheckpoint | None:
+        """读取指定任务最近保存的检查点。
+
+        Args:
+            task_id: 任务唯一标识。
+
+        Returns:
+            最新检查点；任务尚无检查点时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM task_checkpoints WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
@@ -511,6 +693,14 @@ class SQLiteTaskStore:
         return TaskCheckpoint.model_validate_json(row["data"]) if row else None
 
     def get_checkpoint(self, checkpoint_id: str) -> TaskCheckpoint | None:
+        """按检查点 ID 查询检查点。
+
+        Args:
+            checkpoint_id: 检查点唯一标识。
+
+        Returns:
+            找到的检查点；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM task_checkpoints WHERE id = ?", (checkpoint_id,)
@@ -518,6 +708,14 @@ class SQLiteTaskStore:
         return TaskCheckpoint.model_validate_json(row["data"]) if row else None
 
     def save_trace(self, trace: AgentTrace) -> AgentTrace:
+        """新增或更新一次 Agent 执行 Trace。
+
+        Args:
+            trace: 聚合一次 Agent 或工作流执行信息的 Trace。
+
+        Returns:
+            原 Trace 对象。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -535,6 +733,14 @@ class SQLiteTaskStore:
         return trace
 
     def get_trace(self, trace_id: str) -> AgentTrace | None:
+        """按 Trace ID 查询执行追踪。
+
+        Args:
+            trace_id: Trace 唯一标识。
+
+        Returns:
+            找到的 Trace；不存在时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM agent_traces WHERE id = ?", (trace_id,)
@@ -542,6 +748,15 @@ class SQLiteTaskStore:
         return AgentTrace.model_validate_json(row["data"]) if row else None
 
     def list_traces(self, task_id: str | None = None, limit: int = 50) -> list[AgentTrace]:
+        """查询最近的 Agent 执行 Trace。
+
+        Args:
+            task_id: 可选任务 ID；提供时仅查询该任务的 Trace。
+            limit: 最多返回的 Trace 数量。
+
+        Returns:
+            按开始时间倒序排列的 Trace 列表。
+        """
         with self._connect() as connection:
             if task_id:
                 rows = connection.execute(
@@ -555,6 +770,14 @@ class SQLiteTaskStore:
         return [AgentTrace.model_validate_json(row["data"]) for row in rows]
 
     def save_span(self, span: TraceSpan) -> TraceSpan:
+        """新增或更新 Trace 中的一个调用 Span。
+
+        Args:
+            span: Agent、模型或工具调用的可观测性 Span。
+
+        Returns:
+            原 Span 对象。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -568,6 +791,14 @@ class SQLiteTaskStore:
         return span
 
     def list_spans(self, trace_id: str) -> list[TraceSpan]:
+        """按执行顺序返回指定 Trace 的所有 Span。
+
+        Args:
+            trace_id: 所属 Trace 的唯一标识。
+
+        Returns:
+            从最早到最新排列的 Span 列表。
+        """
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT data FROM trace_spans WHERE trace_id = ? ORDER BY started_at, rowid",
@@ -576,7 +807,13 @@ class SQLiteTaskStore:
         return [TraceSpan.model_validate_json(row["data"]) for row in rows]
 
     def trace_metrics(self) -> dict:
+        """聚合可观测性首页使用的 Trace、调用量、Token 和评测指标。
+
+        Returns:
+            包含成功率、平均耗时、LLM/工具调用量、Token 用量及最近评测的字典。
+        """
         def numeric_attribute(span: TraceSpan, key: str) -> int:
+            """将 Span 属性安全转换为整数，非法值按零处理。"""
             value = span.attributes.get(key, 0)
             if isinstance(value, bool):
                 return 0
@@ -614,6 +851,14 @@ class SQLiteTaskStore:
         }
 
     def save_evaluation(self, run: EvaluationRun) -> EvaluationRun:
+        """保存一次 Golden Cases 或检索评测结果。
+
+        Args:
+            run: 包含总分和各评测用例结果的评测运行对象。
+
+        Returns:
+            原评测运行对象。
+        """
         with self._connect() as connection:
             connection.execute(
                 """
@@ -625,6 +870,11 @@ class SQLiteTaskStore:
         return run
 
     def latest_evaluation(self) -> EvaluationRun | None:
+        """读取最近一次评测运行结果。
+
+        Returns:
+            最新评测；尚未执行过评测时返回 ``None``。
+        """
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT data FROM evaluation_runs ORDER BY created_at DESC LIMIT 1"
