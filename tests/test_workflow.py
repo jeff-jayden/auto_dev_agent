@@ -218,6 +218,62 @@ diff --git a/index.js b/index.js
         event_types = [item.event_type for item in orchestrator.store.list_events(task.id)]
         self.assertNotIn("review_repair_resumed", event_types)
 
+    def test_rerun_review_refreshes_workspace_snapshot_before_review(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "刷新审查快照", "重新审查必须使用当前工作区的 Diff 和最新测试结果，而不是旧缓存。"
+        )
+        task = orchestrator.approve(task.id, "tester", "方案可执行")
+        task.status = TaskStatus.CHANGES_REQUESTED
+        task.result.diff = "stale cached diff"
+        task.error = "previous repair failed"
+        orchestrator.store.save_task(task)
+
+        reviewed = orchestrator.run_review(task.id)
+
+        self.assertEqual(reviewed.status, TaskStatus.WAITING_RELEASE_APPROVAL)
+        self.assertNotEqual(reviewed.result.diff, "stale cached diff")
+        self.assertIn("ALLOWED_PRIORITIES", reviewed.result.diff)
+        self.assertEqual(reviewed.metadata["review_snapshot"]["test_exit_code"], 0)
+        self.assertEqual(reviewed.metadata["review_cycle_start"], 1)
+        event_types = [
+            item.event_type for item in orchestrator.store.list_events(task.id)
+        ]
+        self.assertIn("review_snapshot_refresh_started", event_types)
+        self.assertIn("review_snapshot_refreshed", event_types)
+
+    def test_rerun_review_does_not_review_stale_diff_when_refresh_fails(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task(
+            "拒绝旧审查快照", "当前工作区验证失败时必须停止审查，不能继续使用缓存中的旧 Diff。"
+        )
+        task = orchestrator.approve(task.id, "tester", "方案可执行")
+        task.status = TaskStatus.CHANGES_REQUESTED
+        task.result.diff = "stale cached diff"
+        review_count = len(task.reviews)
+        orchestrator.store.save_task(task)
+
+        class FailingDeveloper:
+            model_gateway = type("Gateway", (), {"enabled": True})()
+
+            def run(self, *_args, **_kwargs):
+                return DevelopmentRunOutcome(
+                    kind="failed",
+                    error="current workspace tests failed",
+                )
+
+        orchestrator.code_development_agent = FailingDeveloper()
+        reviewed = orchestrator.run_review(task.id)
+
+        self.assertEqual(reviewed.status, TaskStatus.CHANGES_REQUESTED)
+        self.assertEqual(len(reviewed.reviews), review_count)
+        self.assertEqual(reviewed.result.diff, "stale cached diff")
+        self.assertEqual(reviewed.error, "current workspace tests failed")
+        event_types = [
+            item.event_type for item in orchestrator.store.list_events(task.id)
+        ]
+        self.assertIn("review_snapshot_refresh_failed", event_types)
+
     def test_reviewer_recognizes_use_state_setter_as_defined_click_handler(self):
         orchestrator = build_orchestrator(self.runtime)
         task = orchestrator.create_task(

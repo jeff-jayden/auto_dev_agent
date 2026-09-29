@@ -520,7 +520,7 @@ class TaskDeliveryGraph:
         builder.add_conditional_edges(
             "load_review",
             self._route_review_entry,
-            {"generate_mr": "generate_mr", "review": "review"},
+            {"generate_mr": "generate_mr", "review": "review", "done": END},
         )
         builder.add_conditional_edges(
             "develop",
@@ -636,6 +636,10 @@ class TaskDeliveryGraph:
 
     @staticmethod
     def _route_review_entry(state: TaskDeliveryState) -> str:
+        if state.get("route") == "done":
+            return "done"
+        if state.get("route") == "review":
+            return "review"
         return (
             "generate_mr"
             if state["task"].status == TaskStatus.CHANGE_READY

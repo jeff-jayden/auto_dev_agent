@@ -518,15 +518,100 @@ class TaskOrchestrator:
         repository = self.store.get_repository(task.repository_id or "")
         if repository is None:
             raise ValueError("Repository not found")
+        handler = self._checkpoint_handler(
+            task,
+            state.get("checkpoint_job_id"),
+            state.get("should_pause"),
+        )
+        if task.status == TaskStatus.CHANGES_REQUESTED:
+            refreshed = self._refresh_review_snapshot(task, repository, handler)
+            return {
+                "task": task,
+                "repository": repository,
+                "checkpoint_handler": handler,
+                "route": "review" if refreshed else "done",
+            }
         return {
             "task": task,
             "repository": repository,
-            "checkpoint_handler": self._checkpoint_handler(
-                task,
-                state.get("checkpoint_job_id"),
-                state.get("should_pause"),
-            ),
+            "checkpoint_handler": handler,
         }
+
+    def _refresh_review_snapshot(self, task: Task, repository_config, checkpoint_handler=None) -> bool:
+        """Validate the live workspace and replace stale review inputs before rerunning CR."""
+        task.metadata["review_cycle_start"] = len(task.reviews)
+        task.error = None
+        self._transition(task, TaskStatus.REVIEW_REPAIRING)
+        self._event(
+            task,
+            "review_snapshot_refresh_started",
+            "重新审查前正在验证当前工作区并刷新 Diff 与测试证据",
+        )
+        previous_findings = (
+            self._review_feedback(task.reviews[-1]) if task.reviews else ""
+        )
+        refresh_feedback = (
+            "以下审查意见来自上一次代码快照，必须先结合当前工作区和 Git 基线重新核对，"
+            "不要机械重复已经失效的修改：\n" + previous_findings
+        )
+        outcome = self.code_development_agent.run(
+            task,
+            Path(task.workspace),
+            dependency_repository=Path(repository_config.local_path),
+            review_feedback=refresh_feedback,
+            checkpoint_handler=checkpoint_handler,
+            resume_stage="test_result_saved",
+            resume_payload={
+                "next_attempt": 1,
+                "repair_context": (
+                    "重新审查前必须先验证当前工作区。重新读取当前文件、运行批准的测试命令，"
+                    "如果失败则基于真实测试错误继续修复；不得沿用数据库中缓存的旧 Diff。"
+                ),
+                "review_feedback": refresh_feedback,
+            },
+        )
+        self._append_attempts(task, outcome.attempts, "重新审查预检")
+        if outcome.kind == "paused":
+            if outcome.result is not None:
+                task.result = outcome.result
+            self.store.save_task(task)
+            return False
+        if outcome.kind == "risk_approval":
+            task.pending_proposal = outcome.pending_proposal
+            task.metadata["risk_reasons"] = outcome.risk_reasons
+            task.metadata["review_repair_pending"] = True
+            task.metadata["pending_repair_feedback"] = refresh_feedback
+            self._transition(task, TaskStatus.WAITING_RISK_APPROVAL)
+            self._event(task, "risk_approval_required", "重新审查预检涉及高风险文件，等待人工审批")
+            return False
+        if outcome.kind != "success" or outcome.result is None:
+            task.error = outcome.error or "Review snapshot refresh failed"
+            self._transition(task, TaskStatus.CHANGES_REQUESTED)
+            self._event(
+                task,
+                "review_snapshot_refresh_failed",
+                "当前工作区验证未通过，未使用旧 Diff 继续审查",
+                {"error": task.error},
+            )
+            return False
+
+        task.result = outcome.result
+        task.error = None
+        diff_sha256 = hashlib.sha256(task.result.diff.encode("utf-8")).hexdigest()
+        task.metadata["review_snapshot"] = {
+            "diff_sha256": diff_sha256,
+            "test_exit_code": task.result.exit_code,
+            "refreshed_at": datetime.now(UTC).isoformat(),
+        }
+        self._transition(task, TaskStatus.GENERATING_MR)
+        task.merge_request = self._write_merge_request(task)
+        self._event(
+            task,
+            "review_snapshot_refreshed",
+            "已使用当前工作区的最新 Diff 与测试结果重新生成 MR 草稿",
+            {"diff_sha256": diff_sha256, "test_exit_code": task.result.exit_code},
+        )
+        return True
 
     def _graph_generate_mr(self, state: TaskDeliveryState) -> dict:
         task = state["task"]
