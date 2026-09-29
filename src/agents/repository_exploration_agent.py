@@ -35,6 +35,13 @@ class RepositoryExplorationAgent:
     """
 
     def __init__(self, model_gateway, tracer=None, max_steps: int | None = None):
+        """初始化 Developer 使用的有界只读仓库探索 Agent。
+
+        Args:
+            model_gateway: 决定下一步调用哪种上下文工具的模型网关。
+            tracer: 可选的 Trace 记录器，用于展示探索决策和工具调用链。
+            max_steps: 单轮最多探索步数；未指定时读取环境配置并限制在 1～8 步。
+        """
         self.model_gateway = model_gateway
         self.tracer = tracer
         configured = int(os.getenv("DEVELOPER_CONTEXT_MAX_STEPS", "4"))
@@ -332,6 +339,13 @@ class RepositoryExplorationToolRegistry:
     """LangChain tool registry backed by the project's policy-aware toolkit."""
 
     def __init__(self, toolkit, *, tracer=None, max_calls: int = 8):
+        """注册受项目策略约束的 LangChain 只读工具。
+
+        Args:
+            toolkit: 提供文本、符号、引用、文件和 Git 历史读取能力的开发工具集。
+            tracer: 可选的 Trace 记录器，用于记录每次工具调用。
+            max_calls: 单轮允许执行的最大工具调用数，防止无界探索。
+        """
         self.toolkit = toolkit
         self.tracer = tracer
         self.max_calls = max(1, max_calls)
@@ -464,4 +478,3 @@ class RepositoryExplorationToolRegistry:
         if name == "git_history" and isinstance(result, dict):
             return f"读取 {result.get('path', arguments.get('path', ''))} 的 {len(result.get('entries', []))} 条提交"
         return name
-

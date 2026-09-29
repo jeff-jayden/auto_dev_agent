@@ -25,6 +25,11 @@ _span_id: ContextVar[str | None] = ContextVar("agent_span_id", default=None)
 
 class TraceRecorder:
     def __init__(self, store: SQLiteTaskStore):
+        """初始化调用追踪记录器。
+
+        Args:
+            store: 保存 Trace、Span 和指标数据的任务存储。
+        """
         self.store = store
 
     @staticmethod
@@ -107,6 +112,12 @@ class TraceRecorder:
 
 class TracingModelGateway:
     def __init__(self, delegate, recorder: TraceRecorder):
+        """为模型网关增加可观测性能力。
+
+        Args:
+            delegate: 实际执行模型请求的底层模型网关。
+            recorder: 记录模型调用耗时、Token 和错误信息的追踪器。
+        """
         self.delegate = delegate
         self.recorder = recorder
 

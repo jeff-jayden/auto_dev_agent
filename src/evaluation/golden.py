@@ -19,6 +19,11 @@ class GoldenCaseEvaluator:
     """Fast, deterministic contract cases; it never edits a repository or calls a model."""
 
     def __init__(self, store):
+        """初始化 Golden Cases 评测运行器。
+
+        Args:
+            store: 保存评测运行结果和各用例结果的任务存储。
+        """
         self.store = store
 
     def run(self) -> EvaluationRun:

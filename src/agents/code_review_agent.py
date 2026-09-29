@@ -30,6 +30,11 @@ class CodeReviewAgent:
     CORE_BLOCKING_CATEGORIES = {"acceptance", "functionality", "ui/ux", "user authentication"}
 
     def __init__(self, model_gateway: ModelGateway):
+        """初始化结合规则检查与模型判断的代码审查 Agent。
+
+        Args:
+            model_gateway: 生成结构化审查结论和问题列表的模型网关。
+        """
         self.model_gateway = model_gateway
 
     def review(self, task: Task, round_number: int) -> ReviewRound:

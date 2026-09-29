@@ -26,6 +26,11 @@ from domain.models import (
 
 class SQLiteTaskStore:
     def __init__(self, database_path: Path):
+        """初始化任务持久化存储。
+
+        Args:
+            database_path: SQLite 数据库文件路径，用于保存任务、Job、事件、检查点和追踪数据。
+        """
         self.database_path = database_path
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()

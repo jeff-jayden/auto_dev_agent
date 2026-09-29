@@ -34,6 +34,11 @@ class RecoveryCoordinator:
     """Diagnose interrupted workflows without changing task state."""
 
     def __init__(self, orchestrator: TaskOrchestrator):
+        """初始化任务恢复诊断服务。
+
+        Args:
+            orchestrator: 提供任务、Job、检查点和工作区状态的工作流编排器。
+        """
         self.orchestrator = orchestrator
 
     def diagnose(self, task_id: str) -> RecoveryReport:

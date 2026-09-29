@@ -43,6 +43,13 @@ class DeveloperToolkit:
     SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 
     def __init__(self, repository: Path, policy: ToolPolicy, dependency_repository: Path | None = None):
+        """初始化 Developer Agent 可调用的代码工具集。
+
+        Args:
+            repository: 当前任务的隔离 Git Worktree 路径，所有代码操作均在其中执行。
+            policy: 文件写入范围和测试命令等工具调用约束。
+            dependency_repository: 可选的原始仓库路径，用于复用 node_modules 等本地依赖。
+        """
         self.repository = repository.resolve()
         self.policy = policy
         self.dependency_repository = dependency_repository.resolve() if dependency_repository else None

@@ -41,6 +41,15 @@ class OpenAICompatibleGateway:
         timeout: int = 90,
         extra_payload: dict | None = None,
     ):
+        """初始化 OpenAI 兼容的模型网关。
+
+        Args:
+            base_url: 模型服务的 OpenAI 兼容 API 根地址。
+            model: 每次请求使用的模型名称。
+            api_key: 模型服务鉴权密钥，仅保存在当前进程内存中。
+            timeout: 单次模型请求的超时时间，单位为秒。
+            extra_payload: 合并到请求体中的供应商扩展参数。
+        """
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -133,6 +142,14 @@ class OllamaGateway(OpenAICompatibleGateway):
     """Ollama native API with thinking disabled and schema-constrained JSON output."""
 
     def __init__(self, base_url: str, model: str, api_key: str = "", timeout: int = 240):
+        """初始化 Ollama 原生协议模型网关。
+
+        Args:
+            base_url: Ollama 服务根地址；传入的末尾 ``/v1`` 会被自动移除。
+            model: Ollama 中已安装的模型名称。
+            api_key: 可选鉴权密钥，供受保护的兼容服务使用。
+            timeout: 单次模型请求的超时时间，单位为秒。
+        """
         native_base = base_url.rstrip("/")
         if native_base.endswith("/v1"):
             native_base = native_base[:-3]

@@ -29,6 +29,13 @@ class FigmaMCPClient:
     """Small Streamable HTTP MCP client for Figma design read tools."""
 
     def __init__(self, endpoint: str, artifact_root: Path, timeout: int = 60):
+        """初始化 Figma MCP 客户端。
+
+        Args:
+            endpoint: Figma MCP 服务的 HTTP 地址；为空时表示未启用。
+            artifact_root: 设计快照和相关验收产物的保存目录。
+            timeout: 单次 MCP 请求的超时时间，单位为秒。
+        """
         self.endpoint = endpoint.strip()
         self.artifact_root = artifact_root
         self.timeout = timeout
@@ -192,6 +199,11 @@ class FigmaMCPClient:
 
 class UIAcceptanceService:
     def __init__(self, artifact_root: Path):
+        """初始化 UI 验收服务。
+
+        Args:
+            artifact_root: 实现截图、视觉差异等 UI 验收产物的保存目录。
+        """
         self.artifact_root = artifact_root
 
     def validate(self, task: Task) -> UIAcceptanceReport | None:

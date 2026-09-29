@@ -27,6 +27,11 @@ class RepositoryAnalyzer:
     """Read-only repository inspection with an explicit tool-call audit trail."""
 
     def __init__(self, index_root: Path | None = None):
+        """初始化仓库分析器。
+
+        Args:
+            index_root: 可选的代码索引缓存目录；未提供时仅在内存中构建索引。
+        """
         self.code_index = RepositoryCodeIndex(index_root)
 
     def analyze(self, repository: Path, requirement: str = "") -> RepositoryAnalysis:

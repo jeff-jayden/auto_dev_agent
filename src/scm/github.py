@@ -26,6 +26,13 @@ class GitHubClient:
         api_url: str = "https://api.github.com",
         transport: Transport | None = None,
     ):
+        """初始化 GitHub API 客户端。
+
+        Args:
+            token: GitHub 鉴权 Token，仅用于当前客户端请求。
+            api_url: GitHub REST API 根地址，也可配置为企业版地址。
+            transport: 可选的 HTTP 传输函数，便于测试或替换网络实现。
+        """
         self.token = token.strip()
         self.api_url = api_url.rstrip("/")
         self._transport = transport or self._request

@@ -33,6 +33,12 @@ class RequirementPlanningAgent:
     """Planning agent with a deterministic fallback when no model is configured."""
 
     def __init__(self, model_gateway: ModelGateway | None = None, tracer=None):
+        """初始化需求规划 Agent。
+
+        Args:
+            model_gateway: 可选的结构化模型网关；未配置时使用确定性本地规划器。
+            tracer: 可选的 Trace 记录器，用于记录规划阶段的模型和工具调用。
+        """
         self.model_gateway = model_gateway or DisabledModelGateway()
         self.tracer = tracer
 
@@ -408,6 +414,11 @@ class RequirementPlanningToolRegistry:
     """Read-only LangChain tools over the verified repository analysis."""
 
     def __init__(self, repository: RepositoryAnalysis):
+        """基于已验证的仓库分析结果注册只读规划工具。
+
+        Args:
+            repository: 包含技术栈、上下文文件、代码证据和测试命令的仓库分析结果。
+        """
         self.repository = repository
         self.calls: list[dict[str, Any]] = []
 

@@ -63,6 +63,13 @@ class DevelopmentLoopState(TypedDict, total=False):
 
 class CodeDevelopmentAgent:
     def __init__(self, model_gateway: ModelGateway, max_attempts: int = 3, tracer=None):
+        """初始化负责生成 Patch、测试和自动修复的 Developer Agent。
+
+        Args:
+            model_gateway: 生成结构化代码修改方案和失败修复方案的模型网关。
+            max_attempts: 单次开发或修复允许的最大尝试次数。
+            tracer: 可选的 Trace 记录器，用于记录 Agent、模型和工具 Span。
+        """
         self.model_gateway = model_gateway
         self.max_attempts = max_attempts
         self.tracer = tracer

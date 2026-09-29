@@ -92,6 +92,12 @@ class RetrievalEvaluator:
     """Deterministic A/B benchmark for legacy and hybrid repository retrieval."""
 
     def __init__(self, indexer: RepositoryCodeIndex | None = None, k: int = 3):
+        """初始化代码检索评测器。
+
+        Args:
+            indexer: 待评测的仓库代码索引器；未提供时创建默认实现。
+            k: 每个评测用例取前多少个检索结果计算指标。
+        """
         self.indexer = indexer or RepositoryCodeIndex()
         self.k = k
 

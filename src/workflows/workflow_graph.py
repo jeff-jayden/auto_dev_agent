@@ -175,6 +175,12 @@ class WorkflowStateStore:
     """
 
     def __init__(self, checkpointer, connection: sqlite3.Connection | None = None):
+        """初始化任务状态投影图。
+
+        Args:
+            checkpointer: LangGraph 检查点实现，用于持久化每个任务的图状态。
+            connection: 可选的 SQLite 连接，由状态存储负责在关闭时释放。
+        """
         builder = StateGraph(WorkflowState)
         builder.add_node("project_state", _project_state)
         builder.add_node("await_human_action", _await_human_action)
@@ -402,6 +408,11 @@ class TaskDeliveryGraph:
     """Top-level graph deciding which delivery or agent node runs next."""
 
     def __init__(self, adapter):
+        """初始化任务交付执行图。
+
+        Args:
+            adapter: 将编排器业务方法适配为 LangGraph 节点的对象。
+        """
         self.adapter = adapter
         builder = StateGraph(TaskDeliveryState)
         builder.add_node("dispatch", lambda state: state)

@@ -24,6 +24,13 @@ class RiskAssessment:
 
 class ToolPolicy:
     def __init__(self, repository: Path, allowed_paths: list[str], test_command: str):
+        """初始化 Developer Agent 的工具调用策略。
+
+        Args:
+            repository: 当前任务隔离 Worktree 的根目录。
+            allowed_paths: 技术方案批准的可写文件相对路径列表。
+            test_command: 允许 Agent 执行的项目验证命令。
+        """
         self.repository = repository.resolve()
         self.allowed_paths = {PurePosixPath(path).as_posix() for path in allowed_paths}
         self.test_command = test_command.strip()
@@ -59,4 +66,3 @@ class ToolPolicy:
     def validate_test_command(self, command: str) -> None:
         if command.strip() != self.test_command:
             raise ValueError("Agent requested a command that was not approved by repository analysis")
-

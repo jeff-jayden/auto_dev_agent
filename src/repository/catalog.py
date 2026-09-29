@@ -24,6 +24,14 @@ class RepositoryCatalog:
         clone_root: Path | None = None,
         github_token: str = "",
     ):
+        """初始化可用仓库目录服务。
+
+        Args:
+            store: 保存仓库注册信息的任务存储。
+            allowed_roots: 允许注册本地仓库的根目录白名单。
+            clone_root: 远程仓库克隆后的统一保存目录；默认位于首个允许根目录下。
+            github_token: 拉取受限 GitHub 仓库时使用的鉴权 Token。
+        """
         self.store = store
         self.allowed_roots = list(dict.fromkeys(root.resolve() for root in allowed_roots))
         self.clone_root = (clone_root or self.allowed_roots[0] / ".agent-repositories").resolve()

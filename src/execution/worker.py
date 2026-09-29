@@ -26,6 +26,14 @@ class TaskExecutionWorker:
         heartbeat_interval: float = 10.0,
         lease_seconds: float = 90.0,
     ):
+        """配置负责领取和续租后台执行 Job 的单 Worker。
+
+        Args:
+            orchestrator_provider: 延迟获取业务编排器的函数，避免应用启动时的循环依赖。
+            poll_interval: 没有可执行 Job 时轮询队列的间隔秒数。
+            heartbeat_interval: 运行中向数据库刷新心跳的间隔秒数。
+            lease_seconds: Worker 单次租约有效期；过期后任务可由恢复流程接管。
+        """
         self._orchestrator_provider = orchestrator_provider
         self._poll_interval = poll_interval
         self._heartbeat_interval = heartbeat_interval

@@ -41,6 +41,11 @@ class RepositoryCodeIndex:
     """Persistent, Git-aware code index used to build explainable task context."""
 
     def __init__(self, cache_root: Path | None = None):
+        """初始化仓库代码索引器。
+
+        Args:
+            cache_root: 可选的持久化索引目录，用于按仓库及 HEAD 复用分析结果。
+        """
         self.cache_root = cache_root.resolve() if cache_root else None
         if self.cache_root:
             self.cache_root.mkdir(parents=True, exist_ok=True)

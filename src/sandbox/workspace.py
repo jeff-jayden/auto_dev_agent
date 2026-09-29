@@ -15,6 +15,11 @@ class WorkspaceManager:
     """Creates task-scoped repositories and executes an allow-listed test command."""
 
     def __init__(self, runtime_root: Path):
+        """初始化任务工作区管理器。
+
+        Args:
+            runtime_root: 所有任务隔离 Worktree 的父目录。
+        """
         self.runtime_root = runtime_root.resolve()
 
     def prepare_worktree(self, task_id: str, source_repository: Path, baseline_sha: str) -> Path:

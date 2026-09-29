@@ -18,6 +18,11 @@ from .github import GitHubClient
 
 class GitHubDeliveryService:
     def __init__(self, client: GitHubClient):
+        """初始化 GitHub 交付服务。
+
+        Args:
+            client: 用于推送分支、创建或更新 Pull Request 的 GitHub 客户端。
+        """
         self.client = client
 
     def publish(self, task: Task, repository: Repository) -> RemotePullRequest:

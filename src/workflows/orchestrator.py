@@ -55,6 +55,22 @@ class TaskOrchestrator:
         ui_acceptance_service: UIAcceptanceService | None = None,
         workflow_state: WorkflowStateStore | None = None,
     ):
+        """组装需求从规划、开发、审查到交付的顶层业务编排器。
+
+        Args:
+            store: 持久化任务、Job、事件、检查点和评测结果的 SQLite 仓储。
+            requirement_planning_agent: 生成需求分析和技术方案的规划 Agent。
+            workspace_manager: 基于规划基线创建和管理隔离 Git Worktree。
+            repository_analyzer: 识别仓库技术栈、基线、测试命令和相关代码上下文。
+            code_development_agent: 在批准范围内探索上下文、生成修改并执行测试的开发 Agent。
+            merge_request_builder: 根据最终 Diff、测试证据和验收标准生成 MR 草稿。
+            code_review_agent: 对修改执行确定性检查和模型代码审查的 Reviewer Agent。
+            github_delivery: 可选的 GitHub 分支、Pull Request、评论和合入服务。
+            tracer: 可选的 Trace/Span 记录器，用于记录 Agent、模型和工具调用。
+            figma_client: 可选的 Figma MCP 客户端，用于固定设计基线。
+            ui_acceptance_service: 可选的浏览器截图与视觉差异验收服务。
+            workflow_state: 可选的 LangGraph 状态存储；未提供时使用内存 Checkpointer。
+        """
         self.store = store
         self.requirement_planning_agent = requirement_planning_agent
         self.workspace_manager = workspace_manager
