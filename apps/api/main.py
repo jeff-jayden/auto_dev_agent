@@ -224,10 +224,21 @@ def get_task(task_id: str):
     task = orchestrator.store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Keep the reviewed result immutable while exposing edits left in the
-    # worktree by later (including failed) feedback rounds.
-    task.metadata["workspace_diff"] = orchestrator.current_workspace_diff(task)
     return task
+
+
+@app.get("/api/tasks/{task_id}/diff-files")
+def get_task_diff_files(task_id: str):
+    task = orchestrator.store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {
+        "task_id": task.id,
+        "baseline_sha": (
+            task.repository_analysis.head_sha if task.repository_analysis else None
+        ),
+        "files": orchestrator.current_workspace_files(task),
+    }
 
 
 @app.get("/api/tasks/{task_id}/events")

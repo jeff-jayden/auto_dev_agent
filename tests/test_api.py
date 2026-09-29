@@ -63,6 +63,28 @@ class ApiTests(unittest.TestCase):
                     self.assertEqual(completed["status"], "waiting_release_approval")
                     self.assertIsNotNone(completed["merge_request"])
                     self.assertEqual(completed["reviews"][-1]["decision"], "approved")
+                    self.assertNotIn("workspace_diff", completed["metadata"])
+
+                    diff_files = client.get(
+                        f"/api/tasks/{task['id']}/diff-files"
+                    )
+                    self.assertEqual(diff_files.status_code, 200)
+                    changed = {item["path"]: item for item in diff_files.json()["files"]}
+                    self.assertEqual(changed["task_service.py"]["status"], "modified")
+                    self.assertIn("ALLOWED_PRIORITIES", changed["task_service.py"]["modified"])
+                    self.assertNotIn("ALLOWED_PRIORITIES", changed["task_service.py"]["original"])
+
+                    untracked_path = Path(completed["workspace"]) / "agent-notes.txt"
+                    untracked_path.write_text("new file from agent\n", encoding="utf-8")
+                    changed = {
+                        item["path"]: item
+                        for item in client.get(
+                            f"/api/tasks/{task['id']}/diff-files"
+                        ).json()["files"]
+                    }
+                    self.assertEqual(changed["agent-notes.txt"]["status"], "added")
+                    self.assertEqual(changed["agent-notes.txt"]["original"], "")
+                    self.assertIn("new file from agent", changed["agent-notes.txt"]["modified"])
 
                     merge_request = client.get(f"/api/tasks/{task['id']}/merge-request")
                     self.assertEqual(merge_request.status_code, 200)

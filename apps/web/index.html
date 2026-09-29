@@ -90,11 +90,11 @@
             <section id="development-view" class="workspace-view development-workspace hidden">
               <div class="workspace-column chat-column">
                 <section id="risk-panel" class="panel approval-panel risk-panel hidden"><div><span class="eyebrow">HIGH RISK</span><h2>检测到高风险修改</h2><div id="risk-reasons"></div></div><div class="actions"><button class="secondary" id="risk-reject-button">拒绝</button><button id="risk-approve-button">批准并继续</button></div></section>
-                <section id="development-steps-panel" class="panel development-steps-panel"><div class="development-panel-heading"><div class="section-title"><span>↳</span><div><h2>开发步骤</h2><p id="development-step-summary">按批准方案串行执行</p></div></div><button type="button" class="secondary" id="open-current-diff-button">查看累计 Diff</button></div><div id="development-steps" class="development-steps"></div></section>
+                <section id="development-steps-panel" class="panel development-steps-panel"><div class="development-panel-heading"><div class="section-title"><span>↳</span><div><h2>开发步骤</h2><p id="development-step-summary">按批准方案串行执行</p></div></div><button type="button" class="secondary" id="open-current-diff-button">查看文件对比</button></div><div id="development-steps" class="development-steps"></div></section>
                 <section id="feedback-panel" class="panel feedback-panel hidden"><div class="section-title"><span>AI</span><div><h2>与 Agent 持续对话</h2><p>在当前工作区继续调整代码</p></div></div><div id="chat-messages" class="chat-messages"></div><div class="chat-composer"><textarea id="code-feedback" rows="3" placeholder="描述哪里不符合要求…"></textarea><button type="button" class="secondary" id="rollback-feedback-button">撤销上一轮</button><button id="continue-development-button">发送 <b>→</b></button></div></section>
                 <div id="development-placeholder" class="panel empty-state"><div class="radar"></div><h2>等待开发开始</h2><p>批准技术方案后，这里将出现 Agent 对话。</p></div>
               </div>
-              <article id="development-diff-drawer" class="panel diff-panel development-diff-drawer" aria-hidden="true"><div class="diff-heading"><div class="section-title"><span>Δ</span><div><h2>Git Diff</h2><p id="diff-scope-label">当前任务累计修改</p></div></div><div class="diff-drawer-actions"><button type="button" class="secondary hidden" id="current-diff-button">返回累计 Diff</button><button type="button" class="secondary diff-drawer-close" id="close-diff-button" aria-label="关闭 Git Diff">关闭</button></div></div><div id="diff" class="diff-view"></div></article>
+              <article id="development-diff-drawer" class="panel diff-panel development-diff-drawer" aria-hidden="true"><div class="diff-heading"><div class="section-title"><span>Δ</span><div><h2>文件对比</h2><p id="diff-scope-label">相对于任务基线的当前修改</p></div></div><div class="diff-drawer-actions"><button type="button" class="secondary diff-drawer-close" id="close-diff-button" aria-label="关闭文件对比">关闭</button></div></div><div id="diff" class="diff-view"></div></article>
             </section>
 
             <section id="review-view" class="workspace-view review-workspace hidden">
@@ -107,7 +107,7 @@
                 <section id="result-panel" class="hidden"><article class="panel"><div class="section-title"><span>T</span><div><h2>测试证据</h2><p>测试与构建输出</p></div></div><pre id="test-output"></pre></article><article class="panel"><div class="section-title"><span>MR</span><div><h2>MR 描述</h2><p id="mr-title"></p></div></div><pre id="mr-description"></pre></article></section>
                 <section id="ui-acceptance-panel" class="panel ui-acceptance-panel hidden"><div class="ui-acceptance-heading"><div class="section-title"><span>UI</span><div><h2>UI 验收</h2><p id="ui-acceptance-summary">Figma 设计与浏览器实现证据</p></div></div><button type="button" class="secondary" id="rerun-ui-acceptance-button">重新验收</button></div><div id="ui-acceptance-metrics" class="ui-acceptance-metrics"></div><div id="ui-acceptance-checks" class="ui-acceptance-checks"></div><div id="ui-acceptance-images" class="ui-acceptance-images"></div></section>
                 <section id="review-panel" class="panel hidden"><div class="section-title"><span>CR</span><div><h2>Code Review</h2><p>规则与 Reviewer 审查记录</p></div></div><div id="review-rounds"></div></section>
-                <article class="panel diff-panel review-diff-panel"><div class="section-title"><span>Δ</span><div><h2>累计 Git Diff</h2><p>相对于任务基线的当前净修改</p></div></div><div id="review-diff" class="diff-view"></div></article>
+                <article class="panel diff-panel review-diff-panel"><div class="section-title"><span>Δ</span><div><h2>代码文件对比</h2><p>Monaco Diff Editor · 相对于任务基线的当前净修改</p></div></div><div id="review-diff" class="diff-view"></div></article>
                 <section id="github-comments-panel" class="panel hidden"><div class="github-comments-heading"><div class="section-title"><span>GH</span><div><h2>PR Review 意见</h2><p>手动选择评论，或使用 /agent fix 自动触发</p></div></div><button type="button" class="secondary" id="sync-github-comments-button">同步评论</button></div><div id="github-comments-list" class="github-comments-list"></div><div class="actions github-comments-actions"><button type="button" id="process-github-comments-button">交给 Agent 处理 <b>→</b></button></div></section>
               </div>
             </section>
@@ -139,6 +139,7 @@
       </aside>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="/assets/app.js?v=45"></script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script src="/assets/app.js?v=47"></script>
   </body>
 </html>

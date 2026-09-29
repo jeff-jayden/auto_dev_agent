@@ -387,8 +387,8 @@ diff --git a/tests/task_service.test.js b/tests/task_service.test.js
         feedback_round = updated.metadata["user_feedback_rounds"][0]
         self.assertIn("task_service.py", feedback_round["changed_files"])
         self.assertIn("clearer priority documentation", feedback_round["diff"])
-        self.assertIn("clearer priority documentation", updated.metadata["workspace_diff"])
-        self.assertIn("查看本轮 Diff", feedback_round["agent_message"])
+        self.assertNotIn("workspace_diff", updated.metadata)
+        self.assertIn("查看当前文件对比", feedback_round["agent_message"])
         self.assertEqual(updated.reviews[-1].round, 2)
         event_types = [item.event_type for item in orchestrator.store.list_events(task.id)]
         self.assertIn("user_feedback_submitted", event_types)

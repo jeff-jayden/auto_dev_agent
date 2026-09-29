@@ -1094,9 +1094,9 @@ class TaskOrchestrator:
         )
         decision = completed.reviews[-1].decision if completed.reviews else "not_run"
         message = (
-            "已按意见完成修改，测试和 Code Review 均已通过，请查看本轮 Diff。"
+            "已按意见完成修改，测试和 Code Review 均已通过，请查看当前文件对比。"
             if completed.status == TaskStatus.WAITING_RELEASE_APPROVAL
-            else "已完成代码修改和测试，但 Code Review 仍有阻塞问题，请查看本轮 Diff 和审查意见。"
+            else "已完成代码修改和测试，但 Code Review 仍有阻塞问题，请查看当前文件对比和审查意见。"
         )
         self._finish_user_feedback_round(
             completed, feedback_round, before_snapshot, completed.status.value, message,
@@ -1808,28 +1808,18 @@ class TaskOrchestrator:
         )
         return task
 
-    def current_workspace_diff(self, task: Task) -> str:
-        """读取任务 Worktree 中当前实际存在的累计 Diff。
-
-        失败修复后它可能与 ``task.result.diff`` 不同：result 保留最近一次已验证结果，
-        Worktree 则可能包含仍值得用户检查的未验证修改。
-
-        Args:
-            task: 需要读取累计代码改动的任务。
-
-        Returns:
-            相对规划基线的累计 Diff；工作区不可用时回退到最近一次结果 Diff。
-        """
+    def current_workspace_files(self, task: Task) -> list[dict]:
+        """Return baseline/current file pairs used by the Monaco diff editor."""
         if not task.workspace:
-            return task.result.diff if task.result else ""
+            return []
         workspace = Path(task.workspace)
         if not workspace.is_dir():
-            return task.result.diff if task.result else ""
+            return []
+        baseline = task.repository_analysis.head_sha if task.repository_analysis else None
         try:
-            baseline = task.repository_analysis.head_sha if task.repository_analysis else None
-            return self.workspace_manager.diff_from_baseline(workspace, baseline)[-100_000:]
+            return self.workspace_manager.diff_files_from_baseline(workspace, baseline)
         except (OSError, ValueError, subprocess.SubprocessError):
-            return task.result.diff if task.result else ""
+            return []
 
     def _finish_user_feedback_round(
         self,
@@ -1865,7 +1855,6 @@ class TaskOrchestrator:
             "review_decision": review_decision,
             "test_exit_code": task.result.exit_code if task.result else None,
         })
-        task.metadata["workspace_diff"] = self.current_workspace_diff(task)
         task.metadata["user_feedback_rounds"] = list(
             task.metadata.get("user_feedback_rounds", [])
         )

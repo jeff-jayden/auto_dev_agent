@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 class WorkspaceManager:
@@ -61,14 +62,84 @@ class WorkspaceManager:
         return command, completed.returncode, output
 
     def diff(self, repository: Path) -> str:
+        """Return the patch used by checkpoints, rollback and review internals."""
         completed = self._git(repository, "diff", "--", ".", capture=True)
         return completed.stdout.strip()
 
-    def diff_from_baseline(self, repository: Path, baseline_sha: str | None) -> str:
-        if not baseline_sha:
-            return self.diff(repository)
-        completed = self._git(repository, "diff", baseline_sha, "--", ".", capture=True)
-        return completed.stdout.strip()
+    def diff_files_from_baseline(
+        self,
+        repository: Path,
+        baseline_sha: str | None,
+        *,
+        max_file_bytes: int = 1_000_000,
+    ) -> list[dict[str, Any]]:
+        """Return before/after file contents for a Monaco diff editor.
+
+        Git is asked for paths only.  The API intentionally returns full file
+        contents instead of a unified patch so the browser does not need to
+        parse Git's presentation format.  Untracked files are included as
+        additions; renames are represented as one deletion and one addition.
+        """
+        repository = repository.resolve()
+        baseline = baseline_sha or self._git(
+            repository, "rev-parse", "HEAD", capture=True
+        ).stdout.strip()
+        changed = self._git(
+            repository,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            baseline,
+            "--",
+            ".",
+            capture=True,
+        ).stdout
+        untracked = self._git(
+            repository,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            capture=True,
+        ).stdout
+        paths = sorted({
+            item
+            for output in (changed, untracked)
+            for item in output.split("\0")
+            if item
+        })
+
+        files: list[dict[str, Any]] = []
+        for relative_path in paths:
+            target = (repository / relative_path).resolve()
+            if target != repository and repository not in target.parents:
+                continue
+            original_bytes = self._git_blob(repository, baseline, relative_path)
+            modified_bytes = target.read_bytes() if target.is_file() else None
+            status = (
+                "added" if original_bytes is None else
+                "deleted" if modified_bytes is None else
+                "modified"
+            )
+            contents = [item for item in (original_bytes, modified_bytes) if item is not None]
+            binary = any(b"\0" in item for item in contents)
+            too_large = any(len(item) > max_file_bytes for item in contents)
+            available = not binary and not too_large
+            reason = ""
+            if binary:
+                reason = "二进制文件不支持文本对比"
+            elif too_large:
+                reason = f"文件超过 {max_file_bytes // 1000} KB，未载入编辑器"
+            files.append({
+                "path": relative_path.replace("\\", "/"),
+                "status": status,
+                "original": self._decode_text(original_bytes) if available else "",
+                "modified": self._decode_text(modified_bytes) if available else "",
+                "available": available,
+                "reason": reason,
+            })
+        return files
 
     def sync_default_branch(self, repository: Path, branch: str) -> None:
         status = self._git(repository, "status", "--porcelain", capture=True).stdout.strip()
@@ -90,3 +161,18 @@ class WorkspaceManager:
             timeout=30,
             check=True,
         )
+
+    @staticmethod
+    def _git_blob(repository: Path, revision: str, relative_path: str) -> bytes | None:
+        completed = subprocess.run(
+            ["git", "show", f"{revision}:{relative_path}"],
+            cwd=repository,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return completed.stdout if completed.returncode == 0 else None
+
+    @staticmethod
+    def _decode_text(content: bytes | None) -> str:
+        return content.decode("utf-8", errors="replace") if content is not None else ""

@@ -14,7 +14,10 @@ let observabilityTimelineEvents = [];
 let renderedTimelineTaskId = null;
 let renderedTimelineLatestEvent = null;
 let currentRecovery = null;
-let developmentDiffState = {open: false, taskId: null, mode: "cumulative", key: null};
+let developmentDiffState = {open: false, taskId: null};
+let currentDiffFiles = {taskId: null, revision: null, files: []};
+const monacoDiffViews = new Map();
+let monacoReadyPromise = null;
 
 const chatBottomThreshold = 48;
 
@@ -50,55 +53,117 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[character]);
 }
 
-function parseUnifiedDiff(diff) {
-  const files = [];
-  let file = null;
-  let oldLine = 0;
-  let newLine = 0;
-  for (const raw of String(diff || "").split("\n")) {
-    if (raw.startsWith("diff --git ")) {
-      const match = raw.match(/^diff --git a\/(.+) b\/(.+)$/);
-      file = {path: match ? match[2] : raw.slice(11), rows: [], additions: 0, deletions: 0};
-      files.push(file);
-      continue;
+function loadMonaco() {
+  if (window.monaco) return Promise.resolve(window.monaco);
+  if (monacoReadyPromise) return monacoReadyPromise;
+  monacoReadyPromise = new Promise((resolve, reject) => {
+    if (typeof window.require !== "function") {
+      reject(new Error("Monaco Editor 加载失败，请检查网络连接"));
+      return;
     }
-    if (!file || raw.startsWith("index ") || raw.startsWith("--- ") || raw.startsWith("+++ ")) continue;
-    if (raw.startsWith("@@")) {
-      const match = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
-      if (match) { oldLine = Number(match[1]); newLine = Number(match[2]); }
-      file.rows.push({type: "hunk", text: raw});
-      continue;
-    }
-    if (raw.startsWith("\\ No newline")) {
-      file.rows.push({type: "meta", text: raw});
-    } else if (raw.startsWith("+")) {
-      file.rows.push({type: "add", oldLine: "", newLine: newLine++, marker: "+", text: raw.slice(1)});
-      file.additions += 1;
-    } else if (raw.startsWith("-")) {
-      file.rows.push({type: "delete", oldLine: oldLine++, newLine: "", marker: "−", text: raw.slice(1)});
-      file.deletions += 1;
-    } else {
-      file.rows.push({type: "context", oldLine: oldLine++, newLine: newLine++, marker: " ", text: raw.startsWith(" ") ? raw.slice(1) : raw});
-    }
-  }
-  return files;
+    window.require.config({paths: {vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs"}});
+    window.require(["vs/editor/editor.main"], () => resolve(window.monaco), reject);
+  });
+  return monacoReadyPromise;
 }
 
-function renderDiff(diff, targetSelector = "#diff") {
-  const files = parseUnifiedDiff(diff);
+function languageForPath(path) {
+  const extension = String(path).split(".").pop().toLowerCase();
+  return ({
+    js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
+    py: "python", java: "java", go: "go", rs: "rust", css: "css", scss: "scss",
+    html: "html", htm: "html", json: "json", md: "markdown", yaml: "yaml", yml: "yaml",
+    xml: "xml", sh: "shell", ps1: "powershell", sql: "sql", vue: "vue",
+  })[extension] || "plaintext";
+}
+
+function disposeMonacoDiffView(targetSelector) {
+  const state = monacoDiffViews.get(targetSelector);
+  if (!state) return;
+  state.editor?.setModel(null);
+  state.originalModel?.dispose();
+  state.modifiedModel?.dispose();
+  state.editor?.dispose();
+  monacoDiffViews.delete(targetSelector);
+}
+
+async function renderMonacoDiff(files, targetSelector = "#diff") {
+  const target = $(targetSelector);
+  if (!target) return;
+  const existing = monacoDiffViews.get(targetSelector);
+  if (existing?.files === files) return;
+  disposeMonacoDiffView(targetSelector);
   if (!files.length) {
-    $(targetSelector).innerHTML = '<p class="diff-empty">当前没有代码差异。</p>';
+    target.innerHTML = '<p class="diff-empty">当前没有代码差异。</p>';
     return;
   }
-  $(targetSelector).innerHTML = files.map((file) => {
-    const rows = file.rows.map((row) => {
-      if (row.type === "hunk" || row.type === "meta") {
-        return `<tr class="diff-${row.type}"><td colspan="4"><code>${escapeHtml(row.text)}</code></td></tr>`;
-      }
-      return `<tr class="diff-${row.type}"><td class="diff-line-number">${row.oldLine}</td><td class="diff-line-number">${row.newLine}</td><td class="diff-marker">${escapeHtml(row.marker)}</td><td class="diff-code"><code>${escapeHtml(row.text)}</code></td></tr>`;
-    }).join("");
-    return `<details class="diff-file" open><summary><span class="diff-file-name">▾ ${escapeHtml(file.path)}</span><span class="diff-stat"><b class="diff-add-count">+${file.additions}</b><b class="diff-delete-count">−${file.deletions}</b></span></summary><div class="diff-table-wrap"><table><tbody>${rows}</tbody></table></div></details>`;
-  }).join("");
+  target.innerHTML = `<div class="monaco-diff-shell"><aside class="monaco-file-list">${files.map((file, index) =>
+    `<button type="button" data-diff-file-index="${index}" class="${index === 0 ? "active" : ""}"><span>${escapeHtml(file.path)}</span><small class="diff-status-${escapeHtml(file.status)}">${escapeHtml(({added: "新增", deleted: "删除", modified: "修改"})[file.status] || file.status)}</small></button>`
+  ).join("")}</aside><section class="monaco-diff-main"><header><code class="monaco-current-path"></code><div><button type="button" class="secondary monaco-inline-toggle">单栏</button><button type="button" class="secondary monaco-side-toggle active">左右对比</button></div></header><div class="monaco-editor-host"><p class="diff-loading">正在加载 Monaco Editor…</p></div></section></div>`;
+
+  let monaco;
+  try {
+    monaco = await loadMonaco();
+  } catch (error) {
+    target.querySelector(".monaco-editor-host").innerHTML = `<p class="diff-empty">${escapeHtml(error.message)}</p>`;
+    return;
+  }
+  const host = target.querySelector(".monaco-editor-host");
+  host.innerHTML = "";
+  const editor = monaco.editor.createDiffEditor(host, {
+    readOnly: true,
+    originalEditable: false,
+    automaticLayout: true,
+    renderSideBySide: true,
+    renderOverviewRuler: true,
+    minimap: {enabled: false},
+    scrollBeyondLastLine: false,
+    fontSize: 14,
+    lineHeight: 22,
+    wordWrap: "off",
+    ignoreTrimWhitespace: false,
+  });
+  const state = {editor, originalModel: null, modifiedModel: null, selectedIndex: 0, files};
+  monacoDiffViews.set(targetSelector, state);
+
+  const selectFile = (index) => {
+    const file = files[index];
+    if (!file) return;
+    editor.setModel(null);
+    state.originalModel?.dispose();
+    state.modifiedModel?.dispose();
+    state.originalModel = null;
+    state.modifiedModel = null;
+    state.selectedIndex = index;
+    target.querySelectorAll("[data-diff-file-index]").forEach((button, buttonIndex) => button.classList.toggle("active", buttonIndex === index));
+    target.querySelector(".monaco-current-path").textContent = file.path;
+    if (!file.available) {
+      host.classList.add("unavailable");
+      host.dataset.reason = file.reason || "该文件不能以文本方式对比";
+      return;
+    }
+    host.classList.remove("unavailable");
+    delete host.dataset.reason;
+    const language = languageForPath(file.path);
+    const identity = `${currentTask?.id || "task"}/${target.id}/${index}/${encodeURIComponent(file.path)}`;
+    state.originalModel = monaco.editor.createModel(file.original || "", language, monaco.Uri.parse(`inmemory://original/${identity}`));
+    state.modifiedModel = monaco.editor.createModel(file.modified || "", language, monaco.Uri.parse(`inmemory://modified/${identity}`));
+    editor.setModel({original: state.originalModel, modified: state.modifiedModel});
+    editor.getOriginalEditor().revealLine(1);
+    editor.getModifiedEditor().revealLine(1);
+  };
+  target.querySelectorAll("[data-diff-file-index]").forEach((button) => button.addEventListener("click", () => selectFile(Number(button.dataset.diffFileIndex))));
+  target.querySelector(".monaco-inline-toggle").addEventListener("click", () => {
+    editor.updateOptions({renderSideBySide: false});
+    target.querySelector(".monaco-inline-toggle").classList.add("active");
+    target.querySelector(".monaco-side-toggle").classList.remove("active");
+  });
+  target.querySelector(".monaco-side-toggle").addEventListener("click", () => {
+    editor.updateOptions({renderSideBySide: true});
+    target.querySelector(".monaco-side-toggle").classList.add("active");
+    target.querySelector(".monaco-inline-toggle").classList.remove("active");
+  });
+  selectFile(0);
 }
 
 function analyzeAttemptFailure(attempt) {
@@ -146,9 +211,7 @@ function renderAttemptFiles(attempt, index) {
     ...(proposal.changes || []).map((item) => ({...item, kind: "patch"})),
   ];
   let content;
-  if (attempt.diff) {
-    content = `<div id="attempt-diff-${index}" class="attempt-related-diff"></div>`;
-  } else if (proposedChanges.length) {
+  if (attempt.exit_code !== 0 && proposedChanges.length) {
     content = proposedChanges.map((change) => change.kind === "replacement"
       ? `<article class="attempt-file-change"><header><code>${escapeHtml(change.path)}</code><span>拟修改 · 尚未写入</span></header><div class="attempt-change-grid"><div><b>修改前</b><pre>${escapeHtml(change.search)}</pre></div><div><b>拟修改为</b><pre>${escapeHtml(change.replace)}</pre></div></div></article>`
       : `<article class="attempt-file-change"><header><code>${escapeHtml(change.path)}</code><span>拟修改 · 尚未写入</span></header><pre>${escapeHtml(change.patch)}</pre></article>`
@@ -172,34 +235,32 @@ function renderAttemptToolCalls(attempt) {
   return `<details class="attempt-tools"><summary>Agent 工具调用 <span>${calls.length}</span></summary><div class="attempt-tool-list">${items}</div></details>`;
 }
 
-function cumulativeDiff(task) {
-  return task?.metadata?.workspace_diff || task?.result?.diff || "";
+async function loadCurrentDiffFiles(task, force = false) {
+  if (!task?.workspace) return [];
+  if (!force && currentDiffFiles.taskId === task.id && currentDiffFiles.revision === task.updated_at) {
+    return currentDiffFiles.files;
+  }
+  const payload = await api(`/api/tasks/${task.id}/diff-files`);
+  currentDiffFiles = {taskId: task.id, revision: task.updated_at, files: payload.files || []};
+  return currentDiffFiles.files;
 }
 
-function cumulativeDiffLabel(task) {
-  return task?.metadata?.workspace_diff && task?.status === "changes_requested"
-    ? "当前工作区累计修改（包含尚未通过的修改）"
-    : "当前任务累计修改";
-}
-
-function openDevelopmentDiff(diff, label, mode = "cumulative", key = null) {
+async function openDevelopmentDiff() {
   if (!currentTask) return;
-  renderDiff(diff);
-  $("#diff-scope-label").textContent = label;
-  $("#current-diff-button").classList.toggle("hidden", mode === "cumulative");
-  developmentDiffState = {open: true, taskId: currentTask.id, mode, key};
+  const files = await loadCurrentDiffFiles(currentTask, true);
+  await renderMonacoDiff(files);
+  $("#diff-scope-label").textContent = "相对于任务基线的当前文件对比";
+  developmentDiffState = {open: true, taskId: currentTask.id};
   $("#development-view").classList.add("diff-open");
   $("#development-diff-drawer").setAttribute("aria-hidden", "false");
-  $("#diff").scrollTo({top: 0, behavior: "smooth"});
 }
 
 function openCurrentDevelopmentDiff() {
-  if (!currentTask) return;
-  openDevelopmentDiff(cumulativeDiff(currentTask), cumulativeDiffLabel(currentTask));
+  openDevelopmentDiff().catch((error) => notify(error.message));
 }
 
 function closeDevelopmentDiff() {
-  developmentDiffState = {open: false, taskId: currentTask?.id || null, mode: "cumulative", key: null};
+  developmentDiffState = {open: false, taskId: currentTask?.id || null};
   $("#development-view").classList.remove("diff-open");
   $("#development-diff-drawer").setAttribute("aria-hidden", "true");
 }
@@ -755,20 +816,8 @@ async function render(task) {
     const execution = stepExecutions.get(step.id) || {status: "pending", changed_files: [], attempt_count: 0};
     const labels = {pending: "待执行", running: "执行中", paused: "已暂停", completed: "已完成", failed: "失败"};
     const files = (step.allowed_files || []).map((file) => `<code>${escapeHtml(file)}</code>`).join("");
-    const diffButton = execution.diff
-      ? `<button type="button" class="secondary step-diff-button" data-step-id="${escapeHtml(step.id)}">查看步骤 Diff</button>` : "";
-    return `<article class="development-step step-${escapeHtml(execution.status)}"><div class="step-head"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(step.title)}</b><small>${escapeHtml(labels[execution.status] || execution.status)}${execution.attempt_count ? ` · ${execution.attempt_count} 次尝试` : ""}</small></div></div><p>${escapeHtml(step.objective)}</p><div class="step-files">${files}</div>${execution.error ? `<p class="step-error">${escapeHtml(execution.error)}</p>` : ""}${diffButton}</article>`;
+    return `<article class="development-step step-${escapeHtml(execution.status)}"><div class="step-head"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(step.title)}</b><small>${escapeHtml(labels[execution.status] || execution.status)}${execution.attempt_count ? ` · ${execution.attempt_count} 次尝试` : ""}</small></div></div><p>${escapeHtml(step.objective)}</p><div class="step-files">${files}</div>${execution.error ? `<p class="step-error">${escapeHtml(execution.error)}</p>` : ""}</article>`;
   }).join("");
-  document.querySelectorAll(".step-diff-button").forEach((button) => button.addEventListener("click", () => {
-    const execution = stepExecutions.get(button.dataset.stepId);
-    if (!execution?.diff) return;
-    openDevelopmentDiff(
-      execution.diff,
-      `${execution.title} 完成时的累计 Diff`,
-      "step",
-      button.dataset.stepId,
-    );
-  }));
 
   const analysis = task.repository_analysis;
   $("#repo-facts").innerHTML = [
@@ -798,9 +847,6 @@ async function render(task) {
       : "任务级执行";
     return `<article class="attempt ${attempt.exit_code === 0 ? "attempt-pass" : "attempt-fail"}"><div><div class="attempt-heading"><b>执行记录 #${globalAttempt}</b><small>${stepLabel}</small></div><span>${attempt.exit_code === 0 ? "PASS" : "FAIL"}</span></div><p class="attempt-summary"><b>本轮修改内容：</b>${escapeHtml(attempt.summary)}</p>${attempt.exit_code === 0 ? "" : `<p class="attempt-analysis"><b>失败原因分析：</b>${escapeHtml(analyzeAttemptFailure(attempt))}</p>`}<small>执行结果：exit ${attempt.exit_code}</small>${renderAttemptFiles(attempt, index)}${renderAttemptToolCalls(attempt)}<details class="attempt-log"><summary>查看执行日志</summary><pre>${escapeHtml(attempt.output)}</pre></details></article>`;
   }).join("");
-  attempts.forEach((attempt, index) => {
-    if (attempt.diff && $(`#attempt-diff-${index}`)) renderDiff(attempt.diff, `#attempt-diff-${index}`);
-  });
   const waitingRisk = task.status === "waiting_risk_approval";
   $("#risk-panel").classList.toggle("hidden", !waitingRisk);
   $("#risk-reasons").innerHTML = (task.metadata.risk_reasons || []).map((reason) => `<p>⚠ ${escapeHtml(reason)}</p>`).join("");
@@ -814,21 +860,27 @@ async function render(task) {
   renderTimeline(events, new Map(), task.id);
   $("#approval-panel").classList.toggle("hidden", !["waiting_requirement_approval", "waiting_requirement_input"].includes(task.status));
   const hasResult = Boolean(task.result); $("#result-panel").classList.toggle("hidden", !hasResult);
-  $("#open-current-diff-button").disabled = !cumulativeDiff(task);
+  let diffFiles = [];
+  try {
+    diffFiles = await loadCurrentDiffFiles(task);
+  } catch (error) {
+    notify(`代码对比加载失败：${error.message}`);
+  }
+  $("#open-current-diff-button").disabled = diffFiles.length === 0;
   if (hasResult) {
     $("#test-output").textContent = task.result.output; $("#mr-title").textContent = task.result.mr_title;
     $("#mr-description").textContent = task.merge_request?.description || task.result.mr_description;
     $("#mr-title").textContent = task.merge_request?.title || task.result.mr_title;
-    if (!developmentDiffState.open || developmentDiffState.taskId !== task.id || developmentDiffState.mode === "cumulative") {
-      renderDiff(cumulativeDiff(task));
-      $("#diff-scope-label").textContent = cumulativeDiffLabel(task);
-      $("#current-diff-button").classList.add("hidden");
+    if (developmentDiffState.open && developmentDiffState.taskId === task.id) {
+      await renderMonacoDiff(diffFiles);
     }
-    renderDiff(cumulativeDiff(task), "#review-diff");
+    await renderMonacoDiff(diffFiles, "#review-diff");
   }
   if (!hasResult) {
-    renderDiff("", "#diff");
-    renderDiff("", "#review-diff");
+    disposeMonacoDiffView("#diff");
+    disposeMonacoDiffView("#review-diff");
+    $("#diff").innerHTML = '<p class="diff-empty">当前没有代码差异。</p>';
+    $("#review-diff").innerHTML = '<p class="diff-empty">当前没有代码差异。</p>';
   }
   const reviews = task.reviews || [];
   $("#review-panel").classList.toggle("hidden", reviews.length === 0);
@@ -865,7 +917,7 @@ async function render(task) {
       inheritedConversation.map((feedback, index) => '<div class="chat-message user inherited"><b>历史意见 · 第 ' + (index + 1) + ' 轮</b><p>' + escapeHtml(feedback) + '</p></div>').join("")
     : '';
   const initialChat = followupContext + '<div class="chat-message user"><b>最初需求</b><p>' + escapeHtml(task.requirement) + '</p></div>' +
-    '<div class="chat-message agent"><b>Agent</b><p>首轮开发已完成。请查看累计 Git Diff；如果不符合要求，可以继续发送修改意见。</p></div>';
+    '<div class="chat-message agent"><b>Agent</b><p>首轮开发已完成。请在文件对比中检查当前代码；如果不符合要求，可以继续发送修改意见。</p></div>';
   const feedbackStatusLabels = {
     running: "正在修改",
     failed: "修改失败",
@@ -886,23 +938,16 @@ async function render(task) {
   );
   chatMessages.innerHTML = initialChat + feedbackRounds.map((item, index) => {
     const files = (item.changed_files || []).map((path) => escapeHtml(path)).join(" · ");
-    const diffButton = item.diff ? '<button type="button" class="secondary chat-diff-button" data-feedback-index="' + index + '">查看本轮 Diff</button>' : '';
     const statusLabel = feedbackStatusLabels[item.status] || (item.status ? item.status : "历史记录");
-    const agentMessage = item.agent_message || "这条意见来自旧版本，未保存独立的本轮 Diff；请查看累计 Diff。后续对话会记录每轮修改。";
+    const agentMessage = item.agent_message || "这条意见来自旧版本；请在当前文件对比中查看最终累计修改。";
     return '<div class="chat-message user"><b>你 · 第 ' + (index + 1) + ' 轮</b><p>' + escapeHtml(item.feedback) + '</p><small>' + escapeHtml(item.submitted_at ? new Date(item.submitted_at).toLocaleString() : "") + '</small></div>' +
       '<div class="chat-message agent"><b>Agent · ' + escapeHtml(statusLabel) + '</b><p>' + escapeHtml(agentMessage) + '</p>' +
-      (files ? '<div class="chat-files">修改文件：' + files + '</div>' : '<div class="chat-files">本轮尚无代码变化</div>') + diffButton + '</div>';
+      (files ? '<div class="chat-files">修改文件：' + files + '</div>' : '<div class="chat-files">本轮尚无代码变化</div>') + '</div>';
   }).join("");
   renderedChatTaskId = task.id;
   renderedChatRevision = chatRevision;
   renderedChatVisible = showChat;
   if (shouldScrollToLatest) scrollChatToLatest(chatMessages);
-  document.querySelectorAll(".chat-diff-button").forEach((button) => button.addEventListener("click", () => {
-    const index = Number(button.dataset.feedbackIndex);
-    const round = feedbackRounds[index];
-    if (!round?.diff) return;
-    openDevelopmentDiff(round.diff, `第 ${index + 1} 轮对话产生的修改`, "feedback", index);
-  }));
   $("#release-gate").classList.toggle("hidden", task.status !== "waiting_release_approval");
   const uiBlocking = (task.ui_acceptance?.checks || []).some((check) => check.blocking && check.status === "failed");
   $("#publish-pr-button").disabled = uiBlocking;
@@ -1217,9 +1262,6 @@ $("#rollback-feedback-button").addEventListener("click", async () => {
     await watchJob(job);
   } catch (error) { notify(error.message); }
   finally { button.textContent = "撤销上一轮"; }
-});
-$("#current-diff-button").addEventListener("click", () => {
-  openCurrentDevelopmentDiff();
 });
 $("#open-current-diff-button").addEventListener("click", openCurrentDevelopmentDiff);
 $("#close-diff-button").addEventListener("click", closeDevelopmentDiff);
