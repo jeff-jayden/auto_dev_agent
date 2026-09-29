@@ -115,6 +115,7 @@ async function renderMonacoDiff(files, targetSelector = "#diff") {
     originalEditable: false,
     automaticLayout: true,
     renderSideBySide: true,
+    useInlineViewWhenSpaceIsLimited: false,
     renderOverviewRuler: true,
     minimap: {enabled: false},
     scrollBeyondLastLine: false,
@@ -159,7 +160,10 @@ async function renderMonacoDiff(files, targetSelector = "#diff") {
     target.querySelector(".monaco-side-toggle").classList.remove("active");
   });
   target.querySelector(".monaco-side-toggle").addEventListener("click", () => {
-    editor.updateOptions({renderSideBySide: true});
+    editor.updateOptions({
+      renderSideBySide: true,
+      useInlineViewWhenSpaceIsLimited: false,
+    });
     target.querySelector(".monaco-side-toggle").classList.add("active");
     target.querySelector(".monaco-inline-toggle").classList.remove("active");
   });
