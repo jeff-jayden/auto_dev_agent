@@ -117,7 +117,23 @@ def build_orchestrator(
 
 
 orchestrator = build_orchestrator()
-execution_worker = TaskExecutionWorker(lambda: orchestrator)
+execution_backend = os.getenv("EXECUTION_BACKEND", "local").strip().lower()
+if execution_backend == "celery":
+    from execution.celery_app import dispatch_execution_job
+
+    def dispatch_job(job):
+        broker_task_id = dispatch_execution_job(job)
+        orchestrator.store.mark_job_dispatched(job.id, broker_task_id)
+
+    execution_worker = TaskExecutionWorker(
+        lambda: orchestrator,
+        job_dispatcher=dispatch_job,
+        local_execution=False,
+    )
+elif execution_backend == "local":
+    execution_worker = TaskExecutionWorker(lambda: orchestrator)
+else:
+    raise RuntimeError("EXECUTION_BACKEND must be 'local' or 'celery'")
 app = FastAPI(title="AI Dev Agent", version="0.1.0")
 web_root = PROJECT_ROOT / "apps" / "web"
 app.mount("/assets", StaticFiles(directory=web_root / "assets"), name="assets")
@@ -136,6 +152,7 @@ def health():
         "model_enabled": orchestrator.requirement_planning_agent.model_gateway.enabled,
         "github_enabled": bool(orchestrator.github_delivery and orchestrator.github_delivery.client.enabled),
         "figma_mcp_enabled": bool(orchestrator.figma_client and orchestrator.figma_client.enabled),
+        "execution_backend": execution_backend,
     }
 
 

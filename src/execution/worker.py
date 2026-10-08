@@ -25,6 +25,9 @@ class TaskExecutionWorker:
         poll_interval: float = 0.25,
         heartbeat_interval: float = 10.0,
         lease_seconds: float = 90.0,
+        job_dispatcher: Callable[[ExecutionJob], None] | None = None,
+        local_execution: bool = True,
+        worker_id: str | None = None,
     ):
         """配置负责领取和续租后台执行 Job 的单 Worker。
 
@@ -38,7 +41,9 @@ class TaskExecutionWorker:
         self._poll_interval = poll_interval
         self._heartbeat_interval = heartbeat_interval
         self._lease_seconds = lease_seconds
-        self._worker_id = f"worker-{uuid4().hex[:12]}"
+        self._job_dispatcher = job_dispatcher
+        self._local_execution = local_execution
+        self._worker_id = worker_id or f"worker-{uuid4().hex[:12]}"
         self._wake = Event()
         self._stop = Event()
         self._start_lock = Lock()
@@ -47,6 +52,8 @@ class TaskExecutionWorker:
         self._next_github_poll_at = 0.0
 
     def start(self) -> None:
+        if not self._local_execution:
+            return
         with self._start_lock:
             if self._thread and self._thread.is_alive():
                 return
@@ -59,18 +66,39 @@ class TaskExecutionWorker:
             self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
+        if not self._local_execution:
+            return
         self._stop.set()
         self._wake.set()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout)
 
+    def _notify_job(self, job: ExecutionJob) -> None:
+        """将 Job 交给 Celery，或在兼容模式下唤醒本地轮询线程。"""
+        if self._job_dispatcher is not None:
+            if job.status == "queued" and job.dispatched_at is None:
+                self._job_dispatcher(job)
+            return
+        self.start()
+        self._wake.set()
+
+    def execute_job(self, job_id: str) -> ExecutionJob | None:
+        """按 ID 原子领取并执行一个由消息代理分发的 Job。"""
+        orchestrator = self._orchestrator_provider()
+        job = orchestrator.store.claim_job(
+            job_id, self._worker_id, self._lease_seconds
+        )
+        if job is None:
+            return orchestrator.store.get_job(job_id)
+        self._execute_with_heartbeat(orchestrator, job)
+        return orchestrator.store.get_job(job_id)
+
     def enqueue_approval(self, task_id: str, actor: str, comment: str) -> ExecutionJob:
         orchestrator = self._orchestrator_provider()
         active = orchestrator.store.get_active_job(task_id, "approve")
         if active:
-            self.start()
-            self._wake.set()
+            self._notify_job(active)
             return active
         task = orchestrator.store.get_task(task_id)
         if task is None:
@@ -93,8 +121,7 @@ class TaskExecutionWorker:
                     payload={"job_id": job.id},
                 )
             )
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def cancel(self, job_id: str) -> ExecutionJob:
@@ -131,8 +158,7 @@ class TaskExecutionWorker:
             if item.status in {"queued", "running", "pause_requested"}
         ]
         if active_jobs:
-            self.start()
-            self._wake.set()
+            self._notify_job(active_jobs[0])
             return active_jobs[0]
         task = orchestrator.store.get_task(previous.task_id)
         if task is None:
@@ -175,8 +201,7 @@ class TaskExecutionWorker:
                     payload={"job_id": job.id, "previous_job_id": previous.id},
                 )
             )
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def enqueue_recovery(self, task_id: str, actor: str = "system") -> ExecutionJob:
@@ -187,8 +212,7 @@ class TaskExecutionWorker:
         ]
         active = active_jobs[0] if active_jobs else None
         if active and not orchestrator.store.job_lease_expired(active):
-            self.start()
-            self._wake.set()
+            self._notify_job(active)
             return active
 
         report = RecoveryCoordinator(orchestrator).diagnose(task_id)
@@ -227,16 +251,14 @@ class TaskExecutionWorker:
                     },
                 )
             )
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def retry_failed(self, task_id: str, actor: str = "system") -> ExecutionJob:
         orchestrator = self._orchestrator_provider()
         active = orchestrator.store.get_active_job(task_id, "retry_failed")
         if active:
-            self.start()
-            self._wake.set()
+            self._notify_job(active)
             return active
         task = orchestrator.store.get_task(task_id)
         if task is None:
@@ -259,8 +281,7 @@ class TaskExecutionWorker:
                     payload={"job_id": job.id, "actor": actor},
                 )
             )
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def enqueue_review(self, task_id: str, actor: str = "system") -> ExecutionJob:
@@ -293,8 +314,7 @@ class TaskExecutionWorker:
                 message="Code Review 已进入后台执行队列",
                 payload={"job_id": job.id, "actor": actor},
             ))
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def enqueue_user_feedback(
@@ -303,8 +323,7 @@ class TaskExecutionWorker:
         orchestrator = self._orchestrator_provider()
         active = self._active_feedback_job(orchestrator, task_id)
         if active:
-            self.start()
-            self._wake.set()
+            self._notify_job(active)
             return active
         task = orchestrator.store.get_task(task_id)
         if task is None:
@@ -344,8 +363,7 @@ class TaskExecutionWorker:
                 message="用户修改意见已进入继续开发队列",
                 payload={"job_id": job.id, "actor": actor},
             ))
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     def enqueue_github_comments(
@@ -413,8 +431,7 @@ class TaskExecutionWorker:
             message=f"{len(requested)} 条 GitHub 评论已进入 Agent 修复队列",
             payload={"job_id": job.id, "comment_keys": requested, "actor": actor},
         ))
-        self.start()
-        self._wake.set()
+        self._notify_job(job)
         return job
 
     @staticmethod
@@ -436,7 +453,7 @@ class TaskExecutionWorker:
             if job is None:
                 if monotonic() >= self._next_github_poll_at:
                     self._next_github_poll_at = monotonic() + self._github_poll_interval
-                    self._poll_github_comment_commands(orchestrator)
+                    self.poll_github_comment_commands(orchestrator)
                 self._wake.wait(self._poll_interval)
                 self._wake.clear()
                 continue
@@ -470,7 +487,8 @@ class TaskExecutionWorker:
             stopped.set()
             heartbeat.join(min(self._heartbeat_interval + 0.1, 1.0))
 
-    def _poll_github_comment_commands(self, orchestrator: TaskOrchestrator) -> None:
+    def poll_github_comment_commands(self, orchestrator: TaskOrchestrator) -> None:
+        """同步 GitHub 评论命令；可由本地 Worker 或 Celery Beat 调用。"""
         delivery = orchestrator.github_delivery
         if delivery is None or not delivery.client.enabled:
             return

@@ -80,36 +80,47 @@ flowchart LR
 
 ## ⚙️ 系统架构
 
-系统采用“Web/API + 后台 Job + LangGraph 状态机 + Agent/Tool + Git 工作区”的分层设计。`TaskOrchestrator` 只负责命令入口和依赖适配，下一步执行哪个节点由 `TaskDeliveryGraph` 及其条件边决定。
+系统采用“Web/API + Redis/Celery + LangGraph 状态机 + Agent/Tool + Git 工作区”的分层设计。`TaskOrchestrator` 只负责命令入口和依赖适配，下一步执行哪个节点由 `TaskDeliveryGraph` 及其条件边决定。Celery 只负责分发和执行 Job，不替代 LangGraph 的业务状态与检查点。
 
 ```mermaid
 flowchart TB
     accTitle: AI Dev Agent 系统架构
-    accDescr: 展示浏览器、FastAPI、后台 Worker、LangGraph、Agent 层、SQLite、Git Worktree 和外部集成之间的关系
+    accDescr: 展示 FastAPI 保存业务 Job 后经 Redis 分发到独立 Celery Worker，再由 LangGraph 按顺序调用 Agent 和 Git 工作区的流程
 
     web([👤 Web 工作台]) --> api[🌐 FastAPI]
-    api --> worker[⚙️ Job Worker]
-    worker --> workflow_graph[🔄 LangGraph 工作流]
-    workflow_graph --> agents[🧠 Plan / Developer / Reviewer]
-    workflow_graph --> database[(💾 SQLite 与 Checkpointer)]
+    api --> database[(💾 SQLite 与 Checkpointer)]
+    api --> redis[(📥 Redis Broker)]
+
+    subgraph execution_layer ["⚙️ 后台执行层"]
+        redis --> development_worker[Developer Worker]
+        redis --> review_worker[Reviewer Worker]
+        redis --> github_worker[GitHub Worker]
+        beat[⏰ Celery Beat] --> redis
+        beat --> database
+    end
+
+    development_worker --> workflow_graph[🔄 LangGraph 工作流]
+    review_worker --> workflow_graph
+    github_worker --> workflow_graph
+    workflow_graph --> agents[🧠 Plan、Developer、Reviewer]
+    workflow_graph --> database
     agents --> workspace[🔧 Git Worktree 与工具策略]
-    agents --> integrations[🔌 LLM / GitHub / Figma]
-    api --> database
+    agents --> integrations[🔌 LLM、GitHub、Figma]
 
     classDef interface fill:#f3f4f6,stroke:#6b7280,stroke-width:2px,color:#1f2937
     classDef engine fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a5f
     classDef data fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class web,api interface
-    class worker,workflow_graph,agents engine
-    class database,workspace data
+    class development_worker,review_worker,github_worker,beat,workflow_graph,agents engine
+    class database,redis,workspace data
 ```
 
 | 层 | 职责 | 核心代码 |
 | --- | --- | --- |
 | **交互层** | 三阶段工作台、实时进度、Diff、审查与发布操作 | `apps/web/` |
 | **API 层** | 参数校验、HTTP/SSE 接口、依赖装配 | `apps/api/main.py` |
-| **执行层** | Job 领取、租约、心跳、取消和恢复 | `src/execution/worker.py` |
+| **执行层** | Celery 路由、Job 领取、租约、心跳、取消和恢复 | `src/execution/celery_app.py`、`src/execution/worker.py` |
 | **编排层** | 顶层交付图、状态迁移、人工中断、检查点 | `src/workflows/` |
 | **Agent 层** | 规划、上下文探索、开发、审查和 MR 生成 | `src/agents/` |
 | **工具层** | 文件读取、搜索、Patch、测试和策略约束 | `src/tools/` |
@@ -148,7 +159,7 @@ flowchart TB
 | --- | --- | --- |
 | **LangGraph State** | 任务当前业务阶段、恢复位置、待人工动作 | SQLite Checkpointer，业务状态源 |
 | **Task** | API 和页面读取的任务投影 | Graph 状态迁移后同步 |
-| **ExecutionJob** | 某次批准、重试、恢复或审查由哪个 Worker 执行 | SQLite Job 队列 |
+| **ExecutionJob** | 某次批准、重试、恢复或审查由哪个 Worker 执行 | SQLite 业务记录；Redis 只传递 Job ID |
 | **TaskCheckpoint** | 可展示、回放和恢复的安全节点 | Graph 检查点投影 |
 
 ```mermaid
@@ -180,7 +191,7 @@ stateDiagram-v2
 | `test_result_saved` | 测试结果已保存 | 修复失败或生成 MR |
 | `review_round_saved` | 审查轮次已保存 | 修复 Finding 或等待人工决策 |
 
-Worker 默认每 10 秒更新一次心跳，并持有 90 秒执行租约。进程退出后心跳停止，恢复协调器只会接管租约已过期且检查点有效的 Job；继续执行前还会校验方案、仓库 HEAD、Worktree 和 Diff 是否漂移。
+Worker 默认每 10 秒更新一次 Job 心跳，并持有 90 秒执行租约。进程退出后心跳停止，Celery Beat 每 30 秒扫描租约过期的 Job，并根据有效检查点重新投递；继续执行前还会校验方案、仓库 HEAD、Worktree 和 Diff 是否漂移。Celery 自身的 Worker 心跳只代表进程在线，不能替代业务 Job 心跳。
 
 ## 🚀 快速开始
 
@@ -189,6 +200,7 @@ Worker 默认每 10 秒更新一次心跳，并持有 90 秒执行租约。进�
 | 依赖 | 要求 | 用途 |
 | --- | --- | --- |
 | Python | 3.12+ | API、Agent 和 Worker |
+| WSL Docker | 可运行 Compose | 启动 Redis Broker |
 | Git | 可执行命令行 | 仓库分析、Worktree、Diff 和提交 |
 | Chrome 或 Edge | 可选 | UI 截图验收 |
 | Ollama 或模型 API Key | 开发阶段必需 | 规划、开发和审查模型调用 |
@@ -222,9 +234,35 @@ AGENT_ALLOWED_REPOSITORY_ROOTS=E:\projects
 
 ### 启动
 
+当前本地部署有意将 Redis 与代码执行进程分开：
+
+| 组件 | 部署位置 | 原因 |
+| --- | --- | --- |
+| Redis | WSL Docker 容器 `ai-dev-agent-redis` | 提供可靠消息队列，数据写入 Docker Named Volume |
+| FastAPI | Windows Python 进程 | 提供页面和 API，并访问 Windows 本地路径 |
+| Celery Worker | Windows Python 进程 | 直接访问 `E:\...` 仓库和 Git Worktree |
+| Celery Beat | Windows Python 进程 | 扫描过期租约和轮询 GitHub 指令 |
+
+先在 WSL Docker 中启动 Redis：
+
 ```powershell
+.\scripts\start-redis.ps1
+```
+
+然后分别打开三个 PowerShell 终端：
+
+```powershell
+# 终端 1：执行 development、review、github 和 maintenance 队列
+.\scripts\start-celery-worker.ps1
+
+# 终端 2：定时恢复和 GitHub 评论轮询
+.\scripts\start-celery-beat.ps1
+
+# 终端 3：Web 与 API
 .\scripts\start-local.ps1
 ```
+
+Redis 配置位于 `compose.yaml`，宿主机连接地址为 `127.0.0.1:6379`。持久化数据位于 Docker 管理的 `redis-data` Named Volume，而不是项目的 `runtime/`。如果只需运行不依赖 Redis 的测试，可临时设置 `EXECUTION_BACKEND=local` 使用原有单 Worker 回退模式。
 
 打开 <http://127.0.0.1:8765>，或检查健康状态：
 
@@ -258,6 +296,9 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 | `FIGMA_MCP_URL` | UI 验收 | 空 | Figma Desktop MCP 地址 |
 | `DEVELOPER_CONTEXT_TOOLS_ENABLED` | 否 | `true` | 是否启用 Developer 自主上下文探索 |
 | `DEVELOPER_CONTEXT_MAX_STEPS` | 否 | `4` | 单轮只读探索步数，限制为 1～8 |
+| `EXECUTION_BACKEND` | 否 | `local` | `celery` 使用 Redis 分发；`local` 使用单 Worker 兼容模式 |
+| `CELERY_BROKER_URL` | Celery | `redis://127.0.0.1:6379/0` | Job 消息代理地址 |
+| `CELERY_RESULT_BACKEND` | 否 | `redis://127.0.0.1:6379/1` | Celery 基础设施任务结果；不是业务状态源 |
 
 运行数据写入 `runtime/`：
 
@@ -282,6 +323,7 @@ ai-dev-agent/
 │   ├── domain/                     # Task、Plan、Job、Review、Trace 等领域模型
 │   ├── evaluation/                 # Golden Cases 与检索指标评测
 │   ├── execution/                  # 后台 Worker、租约、心跳和恢复执行
+│   │   └── celery_app.py           # Redis Broker、队列路由、Celery Task 与 Beat 调度
 │   ├── infrastructure/             # SQLite 持久化
 │   ├── llm/                        # 多 Provider 模型网关
 │   ├── observability/              # Trace、Span 和脱敏
@@ -292,6 +334,7 @@ ai-dev-agent/
 │   ├── workflows/                  # 顶层 LangGraph、Orchestrator 和恢复协调器
 │   └── ui_validation.py            # Figma MCP 与浏览器 UI 验收
 ├── scripts/                        # 本地和 Ollama 启动脚本
+├── compose.yaml                    # WSL Docker Redis 服务与持久化卷
 ├── tests/                          # 单元与集成测试
 ├── .env.example                    # 无密钥的配置模板
 ├── pyproject.toml                  # 包信息与依赖
@@ -304,6 +347,7 @@ ai-dev-agent/
 - `src/workflows/workflow_graph.py`：唯一业务状态源与顶层交付图
 - `src/workflows/orchestrator.py`：把 API/Worker 命令适配为 Graph 输入
 - `src/execution/worker.py`：异步执行 Job 并维护心跳租约
+- `src/execution/celery_app.py`：将 Job 分发到 Celery 队列并执行定时恢复
 - `src/agents/code_development_agent.py`：开发、测试和修复子图
 - `src/agents/code_review_agent.py`：审查和修复子图
 
@@ -336,8 +380,8 @@ python -m pytest -q
 
 ### 当前边界
 
-- 后台执行器当前是单进程单 Worker，适合本地演示和单机开发，不是分布式调度系统
-- SQLite 同时承载业务数据和 Checkpointer；多实例部署前应迁移到共享数据库和队列
+- Redis/Celery 已将任务分发与 FastAPI 进程解耦；本地脚本使用 Windows `solo` Worker，启动多个 Worker 进程可以并行处理不同需求
+- SQLite 仍承载业务数据和 Checkpointer；当前适合单机少量 Worker，高并发或跨机器部署前应迁移到 PostgreSQL
 - 混合 RAG 的语义向量是本地确定性实现，生产效果需要真实仓库标注集和正式 Embedding 模型验证
 - Figma MCP 依赖 Figma Desktop Dev Mode；未配置时不影响普通代码需求
 - 系统生成 Draft PR，但最终发布和合入仍由用户确认

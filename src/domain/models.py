@@ -299,6 +299,8 @@ class ExecutionJob(BaseModel):
     current_stage: str | None = None
     recovery_job_id: str | None = None
     failure_kind: str | None = None
+    broker_task_id: str | None = None
+    dispatched_at: datetime | None = None
 
 
 class TaskCheckpoint(BaseModel):

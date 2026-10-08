@@ -435,6 +435,71 @@ class SQLiteTaskStore:
             )
         return job
 
+    def claim_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: float = 90.0,
+    ) -> ExecutionJob | None:
+        """原子领取 Celery 已分发的指定 Job。
+
+        Celery 负责消息分发，数据库仍负责业务幂等：只有 ``queued`` Job
+        可以切换为 ``running``，重复投递的消息会直接返回 ``None``。
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT data FROM execution_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            job = ExecutionJob.model_validate_json(row["data"])
+            if job.status != "queued":
+                return None
+            now = datetime.now(UTC)
+            job.status = "running"
+            job.attempts += 1
+            job.started_at = job.started_at or now
+            job.updated_at = now
+            job.worker_id = worker_id
+            job.heartbeat_at = now
+            job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            job.current_stage = job.current_stage or "starting"
+            cursor = connection.execute(
+                """
+                UPDATE execution_jobs SET status = ?, data = ?, updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (job.status, job.model_dump_json(), job.updated_at.isoformat(), job.id),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return job
+
+    def mark_job_dispatched(
+        self, job_id: str, broker_task_id: str
+    ) -> ExecutionJob | None:
+        """记录消息代理中的任务 ID，同时保留并发更新后的 Job 状态。"""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT data FROM execution_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            job = ExecutionJob.model_validate_json(row["data"])
+            job.broker_task_id = broker_task_id
+            job.dispatched_at = datetime.now(UTC)
+            job.updated_at = datetime.now(UTC)
+            connection.execute(
+                """
+                UPDATE execution_jobs SET status = ?, data = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (job.status, job.model_dump_json(), job.updated_at.isoformat(), job.id),
+            )
+        return job
+
     @staticmethod
     def job_lease_expired(job: ExecutionJob, now: datetime | None = None) -> bool:
         """判断活动 Job 的 Worker 租约是否已经过期。
@@ -593,6 +658,8 @@ class SQLiteTaskStore:
                     job.error = "Recovered after worker restart"
                 job.worker_id = None
                 job.lease_expires_at = None
+                job.broker_task_id = None
+                job.dispatched_at = None
                 job.updated_at = datetime.now(UTC)
                 connection.execute(
                     "UPDATE execution_jobs SET status = ?, data = ?, updated_at = ? WHERE id = ?",

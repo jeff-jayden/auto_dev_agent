@@ -20,5 +20,6 @@ foreach ($rawLine in Get-Content -LiteralPath $environmentFile) {
 }
 
 $env:PYTHONPATH = "src"
+$env:EXECUTION_BACKEND = if ($env:EXECUTION_BACKEND) { $env:EXECUTION_BACKEND } else { "celery" }
 Set-Location -LiteralPath $projectRoot
 python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8765

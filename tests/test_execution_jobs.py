@@ -126,6 +126,36 @@ class ExecutionJobStoreTests(unittest.TestCase):
         self.assertEqual(accepted.current_stage, "testing")
         self.assertGreater(accepted.lease_expires_at, original_expiry)
 
+    def test_claim_specific_job_is_idempotent_for_duplicate_broker_messages(self):
+        self.store.enqueue_job(
+            ExecutionJob(id="job-celery", task_id="task-1", action="approve")
+        )
+
+        claimed = self.store.claim_job("job-celery", "celery-worker-a", lease_seconds=90)
+        duplicate = self.store.claim_job(
+            "job-celery", "celery-worker-b", lease_seconds=90
+        )
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed.status, "running")
+        self.assertEqual(claimed.worker_id, "celery-worker-a")
+        self.assertIsNone(duplicate)
+
+    def test_mark_dispatched_preserves_current_job_status(self):
+        self.store.enqueue_job(
+            ExecutionJob(id="job-dispatched", task_id="task-1", action="approve")
+        )
+        self.store.claim_job("job-dispatched", "celery-worker", lease_seconds=90)
+
+        marked = self.store.mark_job_dispatched(
+            "job-dispatched", "execution-job-dispatched"
+        )
+
+        self.assertEqual(marked.status, "running")
+        self.assertEqual(marked.worker_id, "celery-worker")
+        self.assertEqual(marked.broker_task_id, "execution-job-dispatched")
+        self.assertIsNotNone(marked.dispatched_at)
+
     def test_stale_job_is_atomically_replaced_by_one_recovery_job(self):
         stale = ExecutionJob(
             id="job-old",
