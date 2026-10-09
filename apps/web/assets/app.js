@@ -769,7 +769,8 @@ function renderRagComparison(comparison) {
   }).join("");
   const cases = comparison.cases.map((item) => `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.query)}</small></td><td>${item.expected_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("")}</td><td>${item.baseline_files.length ? item.baseline_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("") : '<span class="rag-empty">未召回</span>'}</td><td>${item.hybrid_files.length ? item.hybrid_files.map((path) => `<code>${escapeHtml(path)}</code>`).join("") : '<span class="rag-empty">未召回</span>'}</td></tr>`).join("");
   panel.classList.remove("hidden");
-  panel.innerHTML = `<div class="rag-heading"><div><h3>混合 RAG A/B 评测</h3><p>相同 ${comparison.case_count} 个标准 Case · Top ${comparison.k} · 旧关键词基线对比混合语义检索</p></div><span>基线 → 混合 RAG</span></div><div class="rag-metrics">${metrics}</div><details><summary>查看每个 Case 的召回文件</summary><div class="rag-table-wrap"><table><thead><tr><th>Case / 查询</th><th>标准答案</th><th>旧检索</th><th>混合 RAG</th></tr></thead><tbody>${cases}</tbody></table></div></details>`;
+  const source = comparison.dataset_kind === "real_repository" ? `真实仓库标注集 · Embedding: ${comparison.embedding_model || "unknown"}` : "模拟契约用例（不代表真实模型效果）";
+  panel.innerHTML = `<div class="rag-heading"><div><h3>混合 RAG A/B 评测</h3><p>${escapeHtml(source)} · ${comparison.case_count} 个 Case · Top ${comparison.k} · ${escapeHtml(comparison.baseline_strategy || "lexical")} → ${escapeHtml(comparison.hybrid_strategy || "legacy_hash_hybrid")}</p></div><span>基线 → 混合 RAG</span></div><div class="rag-metrics">${metrics}</div><details><summary>查看每个 Case 的召回文件</summary><div class="rag-table-wrap"><table><thead><tr><th>Case / 查询</th><th>标准答案</th><th>旧检索</th><th>混合 RAG</th></tr></thead><tbody>${cases}</tbody></table></div></details>`;
 }
 
 function formatRuntime(milliseconds) {

@@ -32,7 +32,7 @@ class RepositoryAnalyzer:
         Args:
             index_root: 可选的代码索引缓存目录；未提供时仅在内存中构建索引。
         """
-        self.code_index = RepositoryCodeIndex(index_root)
+        self.code_index = RepositoryCodeIndex.from_environment(index_root)
 
     def analyze(self, repository: Path, requirement: str = "") -> RepositoryAnalysis:
         repository = repository.resolve()
@@ -57,7 +57,9 @@ class RepositoryAnalyzer:
         )
         tool_calls.append(ToolCallAudit(
             tool="code_index",
-            arguments={"mode": index_mode, "version": context_pack.index_version},
+            arguments={"mode": index_mode, "version": context_pack.index_version,
+                       "retrieval_strategy": context_pack.retrieval_strategy,
+                       "embedding_model": self.code_index.vector_store.embedding.model if self.code_index.vector_store else None},
             summary=(
                 f"代码索引 {index_mode}，选择 {len(context_pack.primary_files)} 个核心文件、"
                 f"{len(context_pack.dependency_files)} 个依赖文件和 {len(context_pack.test_files)} 个测试文件"
@@ -88,7 +90,8 @@ class RepositoryAnalyzer:
     def index_version(self) -> int:
         return self.code_index.version
 
-    def _list_files(self, repository: Path) -> list[str]:
+    @staticmethod
+    def _list_files(repository: Path) -> list[str]:
         result: list[str] = []
         for path in repository.rglob("*"):
             if len(result) >= 1000:

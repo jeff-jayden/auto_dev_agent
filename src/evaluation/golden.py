@@ -1,22 +1,26 @@
 """端到端 Golden Cases 评测入口。
 
-运行不修改仓库、不调用模型的确定性契约用例，并汇总流程稳定性和检索评测结果。
+运行确定性流程契约用例，并按配置执行模拟检索或调用 Embedding 的真实仓库检索评测。
 """
 
 from __future__ import annotations
 
 from time import perf_counter
 from uuid import uuid4
+import os
+import json
+from pathlib import Path
 
-from domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus
+from domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus, RetrievalEvaluationComparison
 from workflows.workflow_graph import ensure_workflow_transition
 from observability import TraceRecorder
 from repository.catalog import RepositoryCatalog
-from .retrieval import RetrievalEvaluator
+from .retrieval import RetrievalEvaluator, evaluate_repository
+from code_intelligence import RepositoryCodeIndex
 
 
 class GoldenCaseEvaluator:
-    """Fast, deterministic contract cases; it never edits a repository or calls a model."""
+    """不修改仓库；embedding 模式检索评测会调用独立向量模型并缓存索引。"""
 
     def __init__(self, store):
         """初始化 Golden Cases 评测运行器。
@@ -40,9 +44,23 @@ class GoldenCaseEvaluator:
             id=uuid4().hex[:16], status="passed" if passed == len(results) else "failed",
             score=round(100 * passed / len(results), 1), passed=passed,
             total=len(results), cases=results,
-            retrieval_comparison=RetrievalEvaluator().run(),
+            retrieval_comparison=self._retrieval_comparison(),
         )
         return self.store.save_evaluation(run)
+
+    @staticmethod
+    def _retrieval_comparison():
+        if os.getenv("RAG_RETRIEVAL_MODE", "legacy") != "embedding":
+            return RetrievalEvaluator().run()
+        project = Path(__file__).resolve().parents[2]
+        repository = Path(os.getenv("RAG_EVALUATION_REPOSITORY", str(project))).resolve()
+        dataset = Path(os.getenv("RAG_EVALUATION_DATASET", str(project / "tests/fixtures/rag_repository_cases.json")))
+        data = json.loads(dataset.read_text(encoding="utf-8"))
+        report = evaluate_repository(repository, data, RepositoryCodeIndex.from_environment(project / "runtime/indexes"))
+        output = project / "runtime/evaluations" / f"rag-{uuid4().hex}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return RetrievalEvaluationComparison.model_validate(report)
 
     @staticmethod
     def _execute(name, case) -> EvaluationCaseResult:

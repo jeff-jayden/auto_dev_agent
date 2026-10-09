@@ -144,12 +144,54 @@ flowchart TB
 | 上下文层 | 内容 | 使用场景 |
 | --- | --- | --- |
 | **仓库事实** | 语言、框架、Git HEAD、入口、测试命令 | 创建任务和生成方案 |
-| **混合 RAG** | 关键词/符号召回、本地语义向量、RRF 融合、依赖扩展 | 筛选核心、依赖和测试文件 |
+| **混合 RAG** | 关键词/符号召回、代码块 Embedding、Chroma、RRF 融合、依赖扩展 | 筛选核心、依赖和测试文件，返回带行号的代码证据 |
 | **自主探索** | 文本、符号、引用、文件和 Git 历史 | Developer 判断初始上下文不足时 |
 | **修复上下文** | 上次失败、测试输出、当前 Diff、Review Finding | 测试修复、CR 修复和用户继续对话 |
 | **Git 基线** | 原始代码片段与删除候选 | 恢复需求未授权删除，避免模型重新编造旧代码 |
 
-当前语义检索使用确定性的本地哈希向量，不依赖额外 Embedding 服务；可以在保持评测接口不变的前提下替换为外部 Embedding 与向量数据库。
+支持两种模式：`legacy` 保留原来的确定性哈希检索用于基线对比；`embedding` 使用真实模型向量。Python 按 AST 符号分段，JS/TS/CSS 按声明边界和有界行窗口分段（不是完整语法解析），每块最多 2400 字符。查询时融合关键词/符号和代码块向量排名，扩展依赖及测试文件；Plan 的代码证据工具可读取命中的片段，Developer 继续按候选文件读取当前完整代码并自主探索，不用片段直接替换整文件。
+
+#### 启用真实 RAG
+
+```powershell
+python -m pip install -e ".[rag]"
+# 单独终端启动 Chroma（API/Celery 共享一个向量服务）
+.\scripts\start-chroma.ps1
+# 另一个终端启动 Ollama
+ollama serve
+# 在另一个终端下载模型（首次约 621 MB）
+ollama pull embeddinggemma
+```
+
+在本地 `.env` 中设置（API 和 Celery Worker 都需重启加载）：
+
+```dotenv
+RAG_RETRIEVAL_MODE=embedding
+RAG_VECTOR_ROOT=runtime/vectors
+RAG_CHROMA_URL=http://127.0.0.1:8001
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_BASE_URL=http://127.0.0.1:11434
+EMBEDDING_MODEL=embeddinggemma
+EMBEDDING_TIMEOUT_SECONDS=60
+```
+
+也支持 `EMBEDDING_PROVIDER=openai` 的兼容 Embedding API，地址填写含 `/v1` 的根地址，密钥只设置到本地 `EMBEDDING_API_KEY`。与 DeepSeek 对话配置相互独立，不会自动把对话模型当作 Embedding 模型。接外部服务会发送代码块，应先确认仓库隐私要求。服务异常会明确报错，不静默退回旧检索。
+
+Chroma 在本机 `127.0.0.1:8001` **独立服务进程**运行，由 `scripts/start-chroma.ps1` 启动，数据存储在 `runtime/vectors`；API/Celery 通过 HTTP 访问，不并发直接写持久化目录。Redis 仍仅用于 Celery，与向量库无关。单进程 CLI/单元测试可不配 `RAG_CHROMA_URL` 使用内嵌模式；Celery 模式会强制检查该配置。需要 Docker 时可独立部署 Chroma 并替换服务地址，不必改 Agent 链路。
+
+按仓库、模型配置和内容快照隔离 collection；未提交文件修改、删除、新增也会更新索引。内容向量缓存复用未变化的块。历史快照保留用于并行和恢复任务，尚未自动清理；长期运行需安排保留策略。更换同名模型的权重时也应使用新的模型版本名或向量目录。
+
+#### 真实仓库 A/B 评测
+
+在已设置上述环境变量的终端运行（命令行入口不会自行读取 `.env`）：
+
+```powershell
+python -m evaluation.retrieval --repository . --dataset tests/fixtures/rag_repository_cases.json --k 3 --output runtime/evaluations/rag-ab.json
+```
+
+同一份工作区、同一标注集对比 **原哈希混合检索 → Embedding + Chroma 混合检索**，报告包含文件级 Recall@K、MRR、Hit@K、无关文件率、平均上下文文件数、查询耗时、命中代码块行号、模型标识、HEAD 和内容指纹。首次建库/预热耗时单独记录。示例提供本项目 8 个文件级标注，属于小样本 smoke benchmark；应补充真实需求、人工校正多文件标签和独立测试集，不能把此结果直接当作开发成功率。
+
+启用 `embedding` 后页面“运行 Golden + RAG 评测”也使用真实仓库集，标明模型和数据来源；完整报告保存在 `runtime/evaluations`。可通过 `RAG_EVALUATION_REPOSITORY` / `RAG_EVALUATION_DATASET` 选择其他仓库及相应人工标注集。`legacy` 模式仍跑原 6 条模拟契约用例，页面会明确区分。真实评测首次建库较慢，当前同步入口适合本机小样本。
 
 ## 💾 状态、任务与恢复
 
@@ -382,7 +424,7 @@ python -m pytest -q
 
 - Redis/Celery 已将任务分发与 FastAPI 进程解耦；本地脚本使用 Windows `solo` Worker，启动多个 Worker 进程可以并行处理不同需求
 - SQLite 仍承载业务数据和 Checkpointer；当前适合单机少量 Worker，高并发或跨机器部署前应迁移到 PostgreSQL
-- 混合 RAG 的语义向量是本地确定性实现，生产效果需要真实仓库标注集和正式 Embedding 模型验证
+- 真实 RAG 已支持独立 Embedding 与 Chroma；默认示例模式仍为 legacy，生产效果需更大规模独立人工标注集验证
 - Figma MCP 依赖 Figma Desktop Dev Mode；未配置时不影响普通代码需求
 - 系统生成 Draft PR，但最终发布和合入仍由用户确认
 - 仓库当前未声明开源许可证，复制、分发或商用前应先补充许可证

@@ -6,6 +6,10 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
+from pathlib import Path
+from time import perf_counter
 from dataclasses import dataclass
 
 from code_intelligence import RepositoryCodeIndex
@@ -194,3 +198,72 @@ class RetrievalEvaluator:
                 "search_text": f"{path}\n{content}".lower(),
             }
         return {"version": 2, "files": records}
+
+
+def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCodeIndex, k: int = 3) -> dict:
+    """同一工作区/同一标签对比旧混合检索与真实 RAG；不把契约假数据当线上效果。"""
+    from repository.analyzer import RepositoryAnalyzer
+    if indexer.vector_store is None:
+        raise ValueError("真实仓库评测必须启用 RAG_RETRIEVAL_MODE=embedding")
+    if k < 1 or not dataset.get("cases"):
+        raise ValueError("评测需要正整数 k 和非空 cases")
+    files = RepositoryAnalyzer._list_files(repository)
+    head = RepositoryAnalyzer._git(repository, "rev-parse", "HEAD")
+    index, mode, _ = indexer.build(repository, files, head)
+    labels = dataset["cases"]
+    for case in labels:
+        if not case.get("query", "").strip() or not case.get("expected_files"):
+            raise ValueError("每个 case 必须有 query 和 expected_files")
+        if not set(case["expected_files"]) <= set(index["files"]):
+            raise ValueError(f"评测标签含不存在或未被索引的文件：{case.get('name', '')}")
+    baseline = RepositoryCodeIndex()
+    rows, timings, results = [], {"baseline": [], "hybrid": []}, []
+    # 单独计入建库耗时，查询计时不混入冷启动建库；空字符串不触发建库。
+    started = perf_counter()
+    indexer.vector_store.search(index, labels[0]["query"], k=1)
+    indexing_ms = (perf_counter() - started) * 1000
+    for case in labels:
+        ranked = {}
+        full = {}
+        for name, engine in (("baseline", baseline), ("hybrid", indexer)):
+            started = perf_counter()
+            full[name] = engine.rank_files(index, case["query"], strategy="hybrid")[:k]
+            ranked[name] = [item["path"] for item in full[name]]
+            timings[name].append((perf_counter() - started) * 1000)
+        rows.append((RetrievalCase(case.get("name", case["query"]), case["query"], tuple(case["expected_files"]), {}), ranked["baseline"], ranked["hybrid"]))
+        results.append({"name": case.get("name"), "query": case["query"], "expected_files": case["expected_files"],
+                        "baseline_files": ranked["baseline"], "hybrid_files": ranked["hybrid"],
+                        "retrieved_chunks": [{key: chunk[key] for key in ("path", "symbol", "start_line", "end_line", "score")}
+                                             for item in full["hybrid"] for chunk in item.get("chunks", [])[:2]]})
+    evaluator = RetrievalEvaluator(k=k)
+    old = evaluator._metrics(rows, position=1).model_dump()
+    new = evaluator._metrics(rows, position=2).model_dump()
+    return {"dataset": dataset.get("name", "custom"), "dataset_kind": "real_repository", "case_count": len(rows), "k": k,
+            "baseline_strategy": "legacy_hash_hybrid", "hybrid_strategy": "embedding_chroma_rrf_v1",
+            "repository": str(repository.resolve()), "head_sha": head,
+            "content_fingerprint": hashlib.sha256(json.dumps([(p, r["hash"]) for p, r in sorted(index["files"].items())]).encode()).hexdigest(),
+            "embedding_model": indexer.vector_store.embedding.model,
+            "embedding_signature": indexer.vector_store.embedding.signature,
+            "index_mode": mode, "indexing_ms": round(indexing_ms, 2),
+            "baseline": old, "hybrid": new,
+            "delta": {key: round(new[key] - old[key], 2) for key in old},
+            "average_query_ms": {name: round(sum(values) / len(values), 2) for name, values in timings.items()},
+            "cases": results,
+            "limitations": "文件级标注集；不是功能成功率或人工验收结论。首个查询预热成本记入 indexing_ms。小样本结果不能外推生产收益。"}
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="真实代码仓库 RAG A/B 评测（调用 Embedding 服务）")
+    parser.add_argument("--repository", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=Path("runtime/evaluations/rag-ab.json"))
+    parser.add_argument("--k", type=int, default=3)
+    arguments = parser.parse_args()
+    data = json.loads(arguments.dataset.read_text(encoding="utf-8"))
+    engine = RepositoryCodeIndex.from_environment(Path("runtime/indexes"))
+    report = evaluate_repository(arguments.repository.resolve(), data, engine, arguments.k)
+    arguments.output.parent.mkdir(parents=True, exist_ok=True)
+    arguments.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({key: report[key] for key in ("case_count", "baseline", "hybrid", "delta", "average_query_ms")}, ensure_ascii=False, indent=2))
+    print(f"评测报告：{arguments.output.resolve()}")

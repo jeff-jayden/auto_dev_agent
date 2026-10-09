@@ -9,15 +9,17 @@ import ast
 import hashlib
 import json
 import math
+import os
 import re
-import subprocess
+from uuid import uuid4
 from collections import Counter
 from pathlib import Path
 
 from domain.models import CodeEvidence, ContextFile, RepositoryContextPack
+from code_intelligence.vector_store import CodeVectorStore, code_chunks
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss"}
 TEST_MARKERS = ("test", "spec", "__tests__")
 SEMANTIC_ALIASES = {
@@ -40,15 +42,32 @@ SEMANTIC_ALIASES = {
 class RepositoryCodeIndex:
     """Persistent, Git-aware code index used to build explainable task context."""
 
-    def __init__(self, cache_root: Path | None = None):
+    def __init__(self, cache_root: Path | None = None, *, vector_store: CodeVectorStore | None = None):
         """初始化仓库代码索引器。
 
         Args:
             cache_root: 可选的持久化索引目录，用于按仓库及 HEAD 复用分析结果。
         """
         self.cache_root = cache_root.resolve() if cache_root else None
+        self.vector_store = vector_store
         if self.cache_root:
             self.cache_root.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def from_environment(cls, cache_root: Path | None = None):
+        """显式启用真实 RAG；服务错误直接报告，不能静默冒充向量检索。"""
+        mode = os.getenv("RAG_RETRIEVAL_MODE", "legacy")
+        if mode not in {"legacy", "embedding"}:
+            raise ValueError("RAG_RETRIEVAL_MODE 只支持 legacy / embedding")
+        if mode == "legacy":
+            return cls(cache_root)
+        from code_intelligence.embedding import EmbeddingClient
+        root = Path(os.getenv("RAG_VECTOR_ROOT", str((cache_root.parent if cache_root else Path("runtime")) / "vectors")))
+        embedding = EmbeddingClient.from_environment()
+        server_url = os.getenv("RAG_CHROMA_URL")
+        if os.getenv("EXECUTION_BACKEND") == "celery" and not server_url:
+            raise ValueError("Celery 多进程使用真实 RAG 时必须配置 RAG_CHROMA_URL，不能共享内嵌 Chroma 目录")
+        return cls(cache_root, vector_store=CodeVectorStore(root, embedding, server_url=server_url))
 
     @property
     def version(self) -> int:
@@ -59,20 +78,30 @@ class RepositoryCodeIndex:
     ) -> tuple[dict, str, list[str]]:
         repository = repository.resolve()
         cached = self._load(repository)
+        source_files = [relative for relative in files if Path(relative).suffix.lower() in SOURCE_SUFFIXES]
+        hashes = {
+            relative: hashlib.sha256((repository / relative).read_text(encoding="utf-8", errors="replace")[:512_000].encode()).hexdigest()
+            for relative in source_files
+        }
         if (
             cached
             and cached.get("version") == INDEX_VERSION
             and head_sha is not None
             and cached.get("head_sha") == head_sha
+            and {path: record.get("hash") for path, record in cached.get("files", {}).items()} == hashes
         ):
             return cached, "cache_hit", []
 
-        changed = self._changed_files(repository, cached, head_sha)
+        # HEAD 相同但工作区已修改/新增/删除时也必须重建相关块。
+        changed = None
+        if cached and cached.get("version") == INDEX_VERSION:
+            old = cached.get("files", {})
+            changed = sorted(path for path in set(old) | set(hashes) if old.get(path, {}).get("hash") != hashes.get(path))
         if cached and changed is not None:
             records = dict(cached.get("files", {}))
             for relative in changed:
                 target = repository / relative
-                if relative not in files or not target.is_file():
+                if relative not in source_files or not target.is_file():
                     records.pop(relative, None)
                 else:
                     records[relative] = self._parse_file(repository, relative)
@@ -161,6 +190,14 @@ class RepositoryCodeIndex:
                 referenced_by=record.get("referenced_by", [])[:20],
             ))
         evidence = self._evidence(repository, selected, terms, reasons)
+        chunk_evidence = [
+            CodeEvidence(path=hit["path"], line=chunk["start_line"], snippet=chunk["text"],
+                         reason=f"真实向量检索 {chunk['symbol']}，行 {chunk['start_line']}-{chunk['end_line']}，相似度 {chunk['score']:.3f}")
+            for hit in ranked_hits if hit["path"] in selected
+            for chunk in hit.get("chunks", [])[:2]
+        ]
+        if chunk_evidence:
+            evidence = (chunk_evidence + [item for item in evidence if item.path not in {chunk.path for chunk in chunk_evidence}])[:16]
         return RepositoryContextPack(
             baseline_sha=index.get("head_sha"),
             index_version=INDEX_VERSION,
@@ -170,7 +207,7 @@ class RepositoryCodeIndex:
             dependency_files=dependencies,
             test_files=tests,
             files=context_files,
-            retrieval_strategy="hybrid_rag_v1",
+            retrieval_strategy="embedding_chroma_rrf_v1" if self.vector_store else "hybrid_rag_v1",
         ), evidence
 
     def rank_files(
@@ -191,7 +228,13 @@ class RepositoryCodeIndex:
         if strategy != "hybrid":
             raise ValueError(f"Unsupported retrieval strategy: {strategy}")
 
-        semantic_scores = self._semantic_scores(records, requirement)
+        chunks_by_path: dict[str, list[dict]] = {}
+        if self.vector_store:
+            for chunk in self.vector_store.search(index, requirement):
+                chunks_by_path.setdefault(chunk["path"], []).append(chunk)
+            semantic_scores = {path: max(chunk["score"] for chunk in chunks) for path, chunks in chunks_by_path.items()}
+        else:
+            semantic_scores = self._semantic_scores(records, requirement)
         lexical_rank = {
             path: rank for rank, path in enumerate(
                 sorted(lexical_scores, key=lambda value: (-lexical_scores[value], value)), 1
@@ -213,8 +256,9 @@ class RepositoryCodeIndex:
                 fused += 0.55 / (20 + lexical_rank[path])
             if path in semantic_rank:
                 fused += 0.45 / (20 + semantic_rank[path])
-                reasons.append(f"语义向量相似度 {semantic_scores[path]:.3f}")
-            hits.append({"path": path, "score": fused, "reasons": reasons})
+                prefix = "Embedding 代码块语义向量" if self.vector_store else "本地哈希语义向量"
+                reasons.append(f"{prefix}相似度 {semantic_scores[path]:.3f}")
+            hits.append({"path": path, "score": fused, "reasons": reasons, "chunks": chunks_by_path.get(path, [])})
         return sorted(hits, key=lambda item: (-item["score"], item["path"]))
 
     def _legacy_lexical_scores(
@@ -338,6 +382,7 @@ class RepositoryCodeIndex:
             "referenced_by": [],
             "symbols": list(dict.fromkeys(symbols))[:200],
             "search_text": (relative + "\n" + content).lower()[:80_000],
+            "chunks": code_chunks(relative, content),
         }
 
     def _resolve_dependencies(self, records: dict[str, dict]) -> None:
@@ -419,25 +464,6 @@ class RepositoryCodeIndex:
             ))
         return result[:16]
 
-    def _changed_files(
-        self, repository: Path, cached: dict | None, head_sha: str | None
-    ) -> list[str] | None:
-        if not cached or not cached.get("head_sha") or not head_sha:
-            return None
-        completed = subprocess.run(
-            ["git", "diff", "--name-only", str(cached["head_sha"]), head_sha, "--"],
-            cwd=repository,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=20,
-            check=False,
-        )
-        if completed.returncode != 0:
-            return None
-        return sorted({line.strip().replace("\\", "/") for line in completed.stdout.splitlines() if line.strip()})
-
     def _cache_path(self, repository: Path) -> Path | None:
         if not self.cache_root:
             return None
@@ -456,4 +482,9 @@ class RepositoryCodeIndex:
     def _save(self, repository: Path, index: dict) -> None:
         path = self._cache_path(repository)
         if path:
-            path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+            temporary = path.with_suffix(f".{uuid4().hex}.tmp")
+            try:
+                temporary.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)

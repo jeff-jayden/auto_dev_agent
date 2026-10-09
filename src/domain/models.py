@@ -405,6 +405,11 @@ class RetrievalCaseResult(BaseModel):
 
 
 class RetrievalEvaluationComparison(BaseModel):
+    dataset_kind: str = "synthetic_contract"
+    baseline_strategy: str = "lexical"
+    hybrid_strategy: str = "legacy_hash_hybrid"
+    embedding_model: str | None = None
+    average_query_ms: dict[str, float] = Field(default_factory=dict)
     case_count: int
     k: int
     baseline: RetrievalMetrics
