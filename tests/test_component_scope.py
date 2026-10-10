@@ -76,7 +76,7 @@ def test_developer_creates_component_and_import_in_same_proposal(tmp_path):
                     "commit", "-qm", "baseline"], check=True)
     gateway = Mock(enabled=True, supports_context_tool_loop=False)
     gateway.generate_structured.return_value = ReplacementDevelopmentProposal(
-        new_files=[request()], preserved_behaviors=["render page"], replacements=[
+        new_files=[request()], replacements=[
             TextReplacement(path="src/pages/YourVideos.js", search="",
                             replace="export default function YourVideos() { return null; }\n"),
             TextReplacement(path="src/App.js", search=app.read_text(encoding="utf-8"),

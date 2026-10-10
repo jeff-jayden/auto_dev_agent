@@ -33,6 +33,27 @@ class RetryResult(BaseModel):
     value: int
 
 
+def test_patch_proposal_without_behavior_declaration_and_legacy_snapshot():
+    from domain.models import DevelopmentAttempt, DevelopmentProposal, ReplacementDevelopmentProposal, Task
+    from agents.code_review_agent import CodeReviewAgent
+
+    patch_data = {"test_command": "pytest", "replacements": [
+        {"path": "main.py", "search": "old", "replace": "new"}
+    ]}
+    response = ReplacementDevelopmentProposal.model_validate(patch_data)
+    assert "preserved_behaviors" not in response.model_json_schema()["properties"]
+    assert "preserved_behaviors" not in response.model_dump()
+    # 已保存的旧提案仍可加载，但废弃字段不再传给 Reviewer。
+    legacy = {**patch_data, "test_command": "pytest", "preserved_behaviors": ["legacy"]}
+    proposal = DevelopmentProposal.model_validate(legacy)
+    assert "preserved_behaviors" not in proposal.model_dump()
+    task = Task(id="legacy", title="legacy", requirement="change", status="developing", development_attempts=[
+        DevelopmentAttempt(attempt=1, summary="change", changed_files=["main.py"],
+                           test_command=["pytest"], exit_code=0, output="", diff="", proposal=proposal)
+    ])
+    assert CodeReviewAgent._latest_semantic_contract(task) == {"intentional_removals": []}
+
+
 def test_json_retries_do_not_accumulate_failed_code_or_schema():
     for gateway in (OpenAICompatibleGateway("http://test", "test"), OllamaGateway("http://test", "test")):
         requests = []

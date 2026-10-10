@@ -170,7 +170,6 @@ class DevelopmentProposal(BaseModel):
     summary: str = "按批准方案实现需求"
     changes: list[PatchChange] = Field(default_factory=list)
     replacements: list[TextReplacement] = Field(default_factory=list)
-    preserved_behaviors: list[str] = Field(default_factory=list)
     intentional_removals: list[str] = Field(default_factory=list)
     test_command: str
 
@@ -179,7 +178,6 @@ class ReplacementDevelopmentProposal(BaseModel):
     new_files: list[NewComponentRequest] = Field(default_factory=list, max_length=8)
     summary: str = "按批准方案实现需求"
     replacements: list[TextReplacement] = Field(min_length=1, max_length=8)
-    preserved_behaviors: list[str] = Field(min_length=1, max_length=12)
     intentional_removals: list[str] = Field(default_factory=list, max_length=12)
     test_command: str
 

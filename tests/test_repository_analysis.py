@@ -68,7 +68,6 @@ class RepositoryAnalysisTests(unittest.TestCase):
                         search="from fastapi import FastAPI\n\napp = FastAPI()",
                         replace="app = object()",
                     )],
-                    preserved_behaviors=["保留 export_users 接口"],
                     test_command="python -m py_compile main.py",
                 )
 

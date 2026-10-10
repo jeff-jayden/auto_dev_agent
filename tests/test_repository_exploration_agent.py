@@ -108,7 +108,6 @@ class DeveloperContextToolTests(unittest.TestCase):
                         replacements=[TextReplacement(
                             path="main.py", search='VALUE = "old"', replace='VALUE = "new"',
                         )],
-                        preserved_behaviors=["保留 main.py 的 VALUE 接口"],
                         test_command="python -m py_compile main.py",
                     )
                 return None
@@ -162,7 +161,6 @@ class DeveloperContextToolTests(unittest.TestCase):
                         replacements=[TextReplacement(
                             path="main.py", search='VALUE = "old"', replace="VALUE =",
                         )],
-                        preserved_behaviors=["保留 VALUE 常量"],
                         test_command="python -m py_compile main.py",
                     )
                 return ReplacementDevelopmentProposal(
@@ -170,7 +168,6 @@ class DeveloperContextToolTests(unittest.TestCase):
                     replacements=[TextReplacement(
                         path="main.py", search="VALUE =", replace='VALUE = "new"',
                     )],
-                    preserved_behaviors=["保留 VALUE 常量"],
                     test_command="python -m py_compile main.py",
                 )
 

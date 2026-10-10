@@ -629,7 +629,6 @@ class CodeDevelopmentAgent:
             "repository_context 判断应恢复调用链还是删除代码；不得为了让检查通过就直接删除。"
             "默认保留现有入口、导出、路由、组件组合、公共接口和已有用户行为；只有需求或技术方案"
             "明确要求移除时才可删除，并在 intentional_removals 中逐项写明删除对象及需求依据。"
-            "preserved_behaviors 必须列出本次修改仍然保留的既有入口和关键行为，不能写空泛表述。"
             "对于简单的按钮点击提示，优先使用 window.alert，除非需求明确要求自定义模态框。"
             "不得引入未导入或未定义的标识符，优先选择最小且无需新增依赖的实现。"
             "test_command 必须原样返回，不得请求或发明其他命令。输出严格 JSON。"
@@ -792,7 +791,6 @@ class CodeDevelopmentAgent:
             summary=response.summary,
             new_files=response.new_files,
             replacements=response.replacements,
-            preserved_behaviors=response.preserved_behaviors,
             intentional_removals=response.intentional_removals,
             test_command=response.test_command,
         )

@@ -405,10 +405,9 @@ class CodeReviewAgent:
         for attempt in reversed(task.development_attempts):
             if attempt.proposal is not None:
                 return {
-                    "preserved_behaviors": attempt.proposal.preserved_behaviors,
                     "intentional_removals": attempt.proposal.intentional_removals,
                 }
-        return {"preserved_behaviors": [], "intentional_removals": []}
+        return {"intentional_removals": []}
 
     @staticmethod
     def _changed_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
