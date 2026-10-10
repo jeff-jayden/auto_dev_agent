@@ -267,18 +267,11 @@ class CodeDevelopmentAgent:
             repair_context = state.get("repair_context", "")
             review_feedback = state.get("review_feedback", "")
             audit_start = len(toolkit.audit)
-            context_pack = task.repository_analysis.context_pack
-            context_paths = list(dict.fromkeys([
-                *write_scope,
-                *session_files,
-                *session_context.keys(),
-                *(context_pack.primary_files if context_pack else []),
-                *(context_pack.dependency_files if context_pack else []),
-                *(context_pack.test_files if context_pack else []),
-            ]))
+            # 仅默认加载本轮批准范围。历史缓存、RAG 辅助文件不自动注入，
+            # 缺失信息由探索器自主补读；每轮重新读取，避免使用旧源码快照。
+            context_paths = list(dict.fromkeys(write_scope))
             with self._span("tool.read_context", file_count=len(context_paths)):
-                context = dict(session_context)
-                context.update(toolkit.read_context(context_paths))
+                context = toolkit.read_context(context_paths)
             with self._span("agent.context_exploration", kind="agent", initial_file_count=len(context)):
                 context = self.repository_exploration_agent.explore(
                     task=task,

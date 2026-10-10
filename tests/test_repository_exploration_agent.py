@@ -11,6 +11,7 @@ from agents.repository_exploration_agent import RepositoryToolDecision
 from agents.repository_exploration_agent import RepositoryExplorationAgent
 from agents.repository_exploration_agent import RepositoryExplorationToolRegistry
 from agents.code_development_agent import CodeDevelopmentAgent
+from llm.gateway import DisabledModelGateway
 from domain.models import (
     RepositoryAnalysis,
     RepositoryContextPack,
@@ -44,6 +45,33 @@ class DeveloperContextToolTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary_directory.cleanup()
+
+    def test_default_context_excludes_rag_auxiliary_and_old_session_files(self):
+        task = Task(
+            id="narrow-context", title="change", requirement="change main", status=TaskStatus.DEVELOPING,
+            repository_analysis=RepositoryAnalysis(language="python", file_count=2,
+                test_command="python -m py_compile main.py",
+                context_pack=RepositoryContextPack(primary_files=["helper.py"],
+                    dependency_files=["helper.py"], test_files=["helper.py"])),
+            technical_plan=TechnicalPlan(approach="change main", affected_files=["main.py"],
+                implementation_steps=[], test_plan=[], risks=[]),
+        )
+        agent = CodeDevelopmentAgent(DisabledModelGateway())
+        def explore(**kwargs):
+            assert list(kwargs["initial_context"]) == ["main.py"]
+            assert kwargs["initial_context"]["main.py"] == 'VALUE = "old"\n'
+            assert kwargs["write_scope"] == ["main.py"]
+            # 模拟自主发现信息缺口后读取辅助文件；读取不扩大写权限。
+            result = dict(kwargs["initial_context"])
+            result.update(kwargs["toolkit"].read_context(["helper.py"]))
+            return result
+        with patch.object(agent.model_gateway, "enabled", True), \
+                patch.object(agent.repository_exploration_agent, "explore", side_effect=explore), \
+                patch.object(agent, "_request_proposal", return_value=None) as proposal:
+            agent.run(task, self.repository, session_files=["helper.py"],
+                      session_context={"main.py": "STALE", "helper.py": "STALE_HELPER"})
+        assert "HiddenHelper" in proposal.call_args.args[1]["helper.py"]
+        assert task.technical_plan.affected_files == ["main.py"]
 
     def test_developer_selects_read_only_tools_before_proposal(self):
         class ToolLoopGateway:

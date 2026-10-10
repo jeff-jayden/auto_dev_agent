@@ -31,6 +31,29 @@ class DisabledModelGateway:
         return None
 
 
+def _json_retry_messages(system_prompt: str, user_prompt: str, error: ValueError,
+                         output_model: type[BaseModel], *, native_schema: bool = False) -> list[dict]:
+    """从原始输入重新生成 JSON，不累计失败回复，也不把源码夹进校验错误。"""
+    if hasattr(error, "errors"):
+        errors = error.errors(include_input=False, include_url=False)
+        detail = json.dumps([
+            {"loc": list(item["loc"])[:12], "type": item["type"], "msg": item["msg"][:200]}
+            for item in errors[:8]
+        ], ensure_ascii=False)[:1800]
+    else:
+        detail = str(error)[:1800]
+    correction = "上次输出未通过 JSON 校验。基于原始需求和源码重新生成完整 JSON，不要解释，不要改变任务语义。\n校验错误：" + detail
+    try:
+        original = json.loads(user_prompt)
+    except (ValueError, TypeError):
+        original = {}
+    if not native_schema and not (isinstance(original, dict) and "output_schema" in original):
+        correction += "\nJSON Schema：" + json.dumps(output_model.model_json_schema(), ensure_ascii=False)
+    return [{"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": correction}]
+
+
 class OpenAICompatibleGateway:
     enabled = True
     supports_context_tool_loop = True
@@ -115,18 +138,7 @@ class OpenAICompatibleGateway:
                 self.last_error = str(error)
                 if attempt == 2:
                     return None
-                if not any(message.get("role") == "assistant" for message in messages):
-                    messages.extend([
-                        {"role": "assistant", "content": content},
-                        {
-                            "role": "user",
-                            "content": (
-                                "上一个 JSON 未通过结构校验。只修正 JSON，不要解释，不要改变任务语义。"
-                                f"\n校验错误：{error}"
-                                f"\n必须符合的 JSON Schema：{json.dumps(output_model.model_json_schema(), ensure_ascii=False)}"
-                            ),
-                        },
-                    ])
+                messages = _json_retry_messages(system_prompt, user_prompt, error, output_model)
         return None
 
 
@@ -215,13 +227,7 @@ class OllamaGateway(OpenAICompatibleGateway):
                 self.last_error = str(error)
                 if attempt == 2:
                     return None
-                messages.extend([
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "user",
-                        "content": "只修正 JSON 结构并严格符合既定 Schema，不要解释。",
-                    },
-                ])
+                messages = _json_retry_messages(system_prompt, user_prompt, error, output_model, native_schema=True)
         return None
 
 

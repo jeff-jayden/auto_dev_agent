@@ -166,7 +166,12 @@ def test_http_retry_is_rebudgeted_and_output_is_reserved(monkeypatch):
     response.read.return_value = json.dumps({"choices": [{"message": {"content": "invalid" * 1000}}]}).encode()
     with patch("urllib.request.urlopen", return_value=response) as http:
         assert gateway.generate_structured("system", "request", Output) is None
-        assert http.call_count == 1
-        sent = json.loads(http.call_args.args[0].data)
-        assert sent["max_tokens"] == 1000
-    assert "budget exceeded" in gateway.last_error
+        # 失败输出不再回灌，请求始终有界，允许完成三次 JSON 修正尝试。
+        assert http.call_count == 3
+        for call in http.call_args_list:
+            sent = json.loads(call.args[0].data)
+            assert sent["max_tokens"] == 1000
+            assert "invalid" * 1000 not in json.dumps(sent["messages"])
+        assert len(sent["messages"]) == 3
+    assert "budget exceeded" not in gateway.last_error
+    assert gateway.last_error
