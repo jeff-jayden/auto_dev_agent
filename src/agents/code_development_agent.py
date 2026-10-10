@@ -170,7 +170,7 @@ class CodeDevelopmentAgent:
                             mr_description=self._mr_description(task, attempts),
                         ),
                     )
-                pending_failure = execution.output
+                pending_failure = self._failure_diagnostics(execution.output)
             for _ in range(3):
                 audit_start = len(toolkit.audit)
                 # Only apply transformations whose correctness follows from
@@ -522,11 +522,7 @@ class CodeDevelopmentAgent:
                 return {"route": "done", "outcome": outcome}
 
             output = execution.output
-            signature = (
-                output
-                if len(output) <= 6_000
-                else output[:4_000] + "\n... output truncated ...\n" + output[-2_000:]
-            )
+            signature = self._failure_diagnostics(output)
             if signature == state.get("last_failure_signature"):
                 if proposal.replacements:
                     toolkit.restore_files(state["context"], changed_files)
@@ -539,7 +535,7 @@ class CodeDevelopmentAgent:
                     ),
                 }
             repair_context = (
-                f"Previous proposal:\n{proposal.model_dump_json(indent=2)}\n"
+                f"Previous proposal summary: {proposal.summary}\nChanged files: {', '.join(changed_files)}\n"
                 f"Test command failed with exit code {execution.exit_code}:\n{signature}"
             )
             if checkpoint_handler and checkpoint_handler(
@@ -725,6 +721,12 @@ class CodeDevelopmentAgent:
             "output_schema": ReplacementDevelopmentProposal.model_json_schema(),
         }
         guidance: list[str] = []
+        if "found multiple elements" in repair_context.lower():
+            guidance.append(
+                "测试查询匹配到多个元素。逐一核对失败测试及相关查询，优先在目标组件区域内使用"
+                "within 或具有明确角色/名称的查询；不要任意取第一个元素，也不要删除断言、"
+                "跳过测试或仅检查元素数量来规避应验证的交互行为。"
+            )
         wiring_terms = (
             "导入", "引用", "调用", "使用方式", "接入", "注册", "路由", "挂载",
             "入口", "调用链", "恢复使用", "恢复原来", "连接",
@@ -796,6 +798,28 @@ class CodeDevelopmentAgent:
         )
 
     @staticmethod
+    def _failure_diagnostics(output: str) -> str:
+        """提取全部测试诊断，排除 Testing Library 的巨大 DOM 和重复栈帧。"""
+        plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+        lines = plain.splitlines()
+        diagnostic = re.compile(
+            r"●|\b(?:FAIL|FAILED|Error|error|SyntaxError|ReferenceError|TypeError)\b|"
+            r"Found multiple|Unable to find|Expected|Received|Test Suites:|Tests:|"
+            r"^\s*(?:>\s*)?\d+\s*\||\^|"
+            r"(?:src/|src\\|tests/|tests\\)[^\s]+:\d+"
+        )
+        selected = []
+        seen = set()
+        for line in lines:
+            if diagnostic.search(line) and "node_modules" not in line and line not in seen:
+                selected.append(line[:1200])
+                seen.add(line)
+        text = "\n".join(selected)
+        if not text:
+            text = plain[:4000] + ("\n...\n" + plain[-4000:] if len(plain) > 4000 else "")
+        return text[:12000]
+
+    @staticmethod
     def _diagnostic_target_files(
         failure_context: str, allowed_files: list[str]
     ) -> list[str]:
@@ -812,6 +836,7 @@ class CodeDevelopmentAgent:
             "is not defined", "cannot find", "not found", "undefined",
             "unresolved", "no module named", "cannot resolve",
             "already been declared", "duplicate declaration", "redeclared",
+            "found multiple elements", "unable to find an element",
         )
         marker_positions = [
             match.start()

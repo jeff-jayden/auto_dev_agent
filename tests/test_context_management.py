@@ -108,6 +108,22 @@ def test_small_soft_budget_overflow_is_allowed_without_cutting_source():
     assert report["output_reserved"] == 8192
 
 
+def test_failure_diagnostics_keep_errors_across_large_dom_dumps():
+    from agents.code_development_agent import CodeDevelopmentAgent
+    output = ("● switches Shorts\nTestingLibraryElementError: Found multiple elements with the text: Shorts\n"
+              + "<div>DOM</div>\n" * 4000
+              + "139 | await click(screen.getByText('Shorts'));\nat src/App.test.js:139:32\n"
+              + "● switches Live\nTestingLibraryElementError: Found multiple elements with the text: Shorts\n"
+              + "<div>DOM</div>\n" * 4000
+              + "162 | expect(screen.getByText('Shorts'));\nat src/App.test.js:162:17\nTests: 2 failed, 16 passed\n")
+    result = CodeDevelopmentAgent._failure_diagnostics(output)
+    assert "switches Shorts" in result and "switches Live" in result
+    assert "139 |" in result and "162 |" in result
+    assert "<div>" not in result
+    assert len(result) < 2000
+    assert CodeDevelopmentAgent._diagnostic_target_files(result, ["src/App.test.js"]) == ["src/App.test.js"]
+
+
 def test_soft_margin_never_consumes_reserved_output_space():
     budget = ContextBudget(window=1200, output=200, safety=100, max_input=1000)
     with pytest.raises(ContextBudgetExceeded):
