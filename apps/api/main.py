@@ -245,18 +245,6 @@ def get_task(task_id: str):
     return task
 
 
-@app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: str):
-    """从历史列表移除任务，不删除 Git 工作区或远端 PR。"""
-    try:
-        deleted = orchestrator.store.delete_task(task_id)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    if not deleted:
-        raise HTTPException(status_code=404, detail="任务不存在或已删除")
-    return {"task_id": task_id, "deleted": True}
-
-
 @app.get("/api/tasks/{task_id}/diff-files")
 def get_task_diff_files(task_id: str):
     task = orchestrator.store.get_task(task_id)

@@ -370,7 +370,7 @@ function renderTaskList() {
     const recoverable = task.recovery?.status === "recoverable";
     const label = statusLabels[task.status] || task.status;
     const relation = task.metadata?.followup_of ? "后续任务 · " : "";
-    return `<div class="task-history-row"><button type="button" class="task-list-item${active}${recoverable ? " has-recovery" : ""}" data-task-id="${escapeHtml(task.id)}"><b>${escapeHtml(task.title)}</b>${recoverable ? '<em class="task-recovery-badge">可恢复</em>' : ""}<span>${escapeHtml(task.requirement || "暂无需求描述")}</span><small>${escapeHtml(relation + label)} · ${new Date(task.updated_at).toLocaleString()}</small></button><button type="button" class="task-delete-button" data-delete-task-id="${escapeHtml(task.id)}" aria-label="删除任务：${escapeHtml(task.title)}" title="删除历史任务">删除</button></div>`;
+    return `<button type="button" class="task-list-item${active}${recoverable ? " has-recovery" : ""}" data-task-id="${escapeHtml(task.id)}"><b>${escapeHtml(task.title)}</b>${recoverable ? '<em class="task-recovery-badge">可恢复</em>' : ""}<span>${escapeHtml(task.requirement || "暂无需求描述")}</span><small>${escapeHtml(relation + label)} · ${new Date(task.updated_at).toLocaleString()}</small></button>`;
   }).join("") || '<p class="task-list-empty">还没有任务，点击＋创建第一个任务。</p>';
   ["#task-list", "#task-list-active"].forEach((selector) => {
     const listElement = $(selector);
@@ -379,32 +379,6 @@ function renderTaskList() {
   document.querySelectorAll(".task-list-item").forEach((item) => item.addEventListener("click", async () => {
     try { await selectTask(item.dataset.taskId, "requirement"); }
     catch (error) { notify(error.message); }
-  }));
-  document.querySelectorAll(".task-delete-button").forEach((button) => button.addEventListener("click", async () => {
-    const taskId = button.dataset.deleteTaskId;
-    const task = knownTasks.find((item) => item.id === taskId);
-    if (!task || !window.confirm(`确认删除历史任务“${task.title}”？\n任务将从列表移除，代码工作区、GitHub PR 和审计记录会保留。`)) return;
-    button.disabled = true;
-    try {
-      await api(`/api/tasks/${encodeURIComponent(taskId)}`, {method: "DELETE"});
-      knownTasks = knownTasks.filter((item) => item.id !== taskId);
-      if (currentTask?.id === taskId) {
-        watchGeneration += 1;
-        closeDevelopmentDiff();
-        currentTask = null;
-        currentJob = null;
-        currentRecovery = null;
-        observabilityTaskId = null;
-        localStorage.removeItem("ai-dev-agent-current-task");
-        $("#job-panel").classList.add("hidden");
-        setView("requirement", {refreshData: false});
-      }
-      renderTaskList();
-      notify("历史任务已删除（代码与 PR 保留）");
-    } catch (error) {
-      button.disabled = false;
-      notify(error.message);
-    }
   }));
 }
 
