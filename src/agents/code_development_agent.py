@@ -114,6 +114,7 @@ class CodeDevelopmentAgent:
             return DevelopmentRunOutcome(kind="failed", error="Development step contains files outside the approved plan")
         policy = ToolPolicy(repository, write_scope, test_command)
         toolkit = DeveloperToolkit(repository, policy, dependency_repository)
+        toolkit.diff_baseline = task.repository_analysis.head_sha or "HEAD"
         session_context = session_context if session_context is not None else {}
         session_files = session_files or []
         attempts: list[DevelopmentAttempt] = []

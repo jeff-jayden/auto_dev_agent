@@ -409,12 +409,8 @@ class DeveloperToolkit:
         return TestExecution(arguments, exit_code, output)
 
     def diff(self) -> str:
-        completed = subprocess.run(
-            ["git", "diff", "--", "."], cwd=self.repository,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=20, check=True,
-        )
-        result = (completed.stdout or "").strip()
+        from infrastructure.git_diff import workspace_diff
+        result = workspace_diff(self.repository, getattr(self, "diff_baseline", "HEAD"))
         self.audit.append(ToolCallAudit(tool="git_diff", summary=f"Diff 共 {len(result.splitlines())} 行"))
         return result
 

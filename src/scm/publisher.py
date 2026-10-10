@@ -11,6 +11,8 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from infrastructure.git_diff import workspace_diff
+
 from domain.models import RemotePullRequest, Repository, Task
 
 from .github import GitHubClient
@@ -44,8 +46,10 @@ class GitHubDeliveryService:
             task.repository_analysis.default_branch if task.repository_analysis else None
         )
         base = base or "main"
-        current_diff = self._git(workspace, "diff", "--", ".")
-        if current_diff.strip() and current_diff.strip() != task.result.diff.strip():
+        current_diff = workspace_diff(workspace)
+        baseline = task.repository_analysis.head_sha if task.repository_analysis else None
+        reviewed_diff = workspace_diff(workspace, baseline or "HEAD")
+        if reviewed_diff.strip() != task.result.diff.strip():
             raise ValueError("Worktree diff no longer matches the reviewed result")
 
         self._git(workspace, "config", "user.email", "ai-dev-agent@users.noreply.github.com")
@@ -56,7 +60,12 @@ class GitHubDeliveryService:
             if not changed_files:
                 raise ValueError("Reviewed change contains no files")
             self._git(workspace, "add", "--", *changed_files)
+            staged = self._git(workspace, "diff", "--cached", "--no-ext-diff", "--no-renames", "HEAD", "--", ".")
+            if staged.strip() != current_diff.strip():
+                raise ValueError("Staged files do not match the reviewed pending changes")
             self._git(workspace, "commit", "-m", f"feat(agent): {task.title} [{task.id}]")
+        if workspace_diff(workspace):
+            raise ValueError("Uncommitted files remain after preparing the PR commit")
         head_sha = self._git(workspace, "rev-parse", "HEAD").strip()
         self._push(workspace, branch)
 

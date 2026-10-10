@@ -65,8 +65,8 @@ class WorkspaceManager:
 
     def diff(self, repository: Path) -> str:
         """Return the patch used by checkpoints, rollback and review internals."""
-        completed = self._git(repository, "diff", "--", ".", capture=True)
-        return completed.stdout.strip()
+        from infrastructure.git_diff import workspace_diff
+        return workspace_diff(repository)
 
     def baseline_deletion_candidates(
         self,
