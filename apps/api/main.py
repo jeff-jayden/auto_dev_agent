@@ -26,6 +26,7 @@ from execution import TaskExecutionWorker
 from llm import ModelGateway, build_model_gateway
 from observability import TraceRecorder, TracingModelGateway
 from evaluation import GoldenCaseEvaluator
+from evaluation.dataset import AnnotationRequest, DatasetConflict, DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService
 from repository import RepositoryAnalyzer, RepositoryCatalog
 from sandbox import WorkspaceManager
 from scm import GitHubClient, GitHubDeliveryService
@@ -405,6 +406,56 @@ def get_trace(trace_id: str):
 @app.get("/api/metrics")
 def get_metrics():
     return orchestrator.store.trace_metrics()
+
+
+_rag_service = None
+
+
+def rag_service():
+    """复用评测锁；测试替换 Orchestrator 时不继续使用原数据库。"""
+    global _rag_service
+    if _rag_service is None or _rag_service.store is not orchestrator.store:
+        _rag_service = RagDatasetService(orchestrator.store, orchestrator.github_delivery.client if orchestrator.github_delivery else None,
+                                        runtime_root=orchestrator.store.database_path.parent / "rag-evaluation")
+    return _rag_service
+
+
+def rag_call(operation, *args):
+    try:
+        return operation(*args)
+    except DatasetConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (RuntimeError, OSError) as error:
+        raise HTTPException(status_code=503, detail="评测依赖暂不可用，请检查 GitHub、Chroma 和 Embedding 服务") from error
+
+
+@app.get("/api/rag/dataset")
+def get_rag_dataset():
+    return rag_call(rag_service().overview)
+
+
+@app.post("/api/rag/dataset/import")
+def import_rag_dataset(request: DatasetImportRequest):
+    return rag_call(rag_service().import_history, request)
+
+
+@app.put("/api/rag/dataset/cases/{case_id}")
+def annotate_rag_case(case_id: str, request: AnnotationRequest):
+    return rag_call(rag_service().annotate, case_id, request)
+
+
+@app.get("/api/rag/dataset/cases/{case_id}/files")
+def list_rag_baseline_files(case_id: str):
+    return {"files": rag_call(rag_service().baseline_files, case_id)}
+
+
+@app.post("/api/rag/dataset/evaluate")
+def evaluate_rag_dataset(request: DatasetEvaluationRequest):
+    return rag_call(rag_service().evaluate, request)
 
 
 @app.post("/api/evaluations/run")

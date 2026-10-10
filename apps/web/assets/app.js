@@ -286,6 +286,7 @@ const viewLabels = {
   review: ["CODE REVIEW", "代码 CR"],
   observability: ["OBSERVABILITY", "Agent 可观测性"],
   attempts: ["DEVELOPMENT LOG", "开发尝试"],
+  rag: ["RAG EVALUATION", "RAG 评测与标注"],
   create: ["NEW TASK", "新建任务"],
 };
 
@@ -295,19 +296,21 @@ function defaultViewForTask(task) {
 
 function updateNavigationAvailability() {
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.disabled = button.dataset.view !== "requirement" && !currentTask;
+    button.disabled = !["requirement", "rag"].includes(button.dataset.view) && !currentTask;
   });
 }
 
 function setView(view, {refreshData = true} = {}) {
-  if (view !== "create" && view !== "requirement" && !currentTask) return;
+  if (!["create", "requirement", "rag"].includes(view) && !currentTask) return;
   activeView = view;
   const label = viewLabels[view] || viewLabels.requirement;
   $("#view-eyebrow").textContent = label[0];
   $("#view-title").textContent = label[1];
   $("#create-view").classList.toggle("hidden", view !== "create");
-  $("#empty-state").classList.toggle("hidden", Boolean(currentTask) || view === "create");
-  $("#task-view").classList.toggle("hidden", !currentTask || view === "create");
+  $("#empty-state").classList.toggle("hidden", Boolean(currentTask) || ["create", "rag"].includes(view));
+  $("#task-view").classList.toggle("hidden", !currentTask || ["create", "rag"].includes(view));
+  $("#rag-view").classList.toggle("hidden", view !== "rag");
+  if (refreshData && view === "rag") loadRagDataset().catch((error) => notify(error.message));
   ["requirement", "development", "review", "observability", "attempts"].forEach((name) => {
     const element = $(`#${name}-view`);
     if (element) element.classList.toggle("hidden", !currentTask || view !== name);

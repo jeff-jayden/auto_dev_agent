@@ -105,6 +105,18 @@ class GitHubClient:
             raise GitHubApiError("GitHub returned an invalid pull request response")
         return result
 
+    def list_pull_request_files(self, repository: str, number: int) -> list[dict]:
+        """只读分页获取 PR 文件；API 上限 3000 时明确报错，避免伪装成完整结果。"""
+        files = []
+        for page in range(1, 31):
+            result = self._transport("GET", f"/repos/{repository}/pulls/{number}/files?per_page=100&page={page}", None)
+            if not isinstance(result, list) or any(not isinstance(item, dict) or not item.get("filename") for item in result):
+                raise GitHubApiError("GitHub returned invalid pull request files")
+            files.extend(result)
+            if len(result) < 100:
+                return files
+        raise GitHubApiError("PR 文件达到 GitHub 3000 条上限，请缩小标注范围并人工检查完整性")
+
     def merge_pull_request(self, repository: str, number: int, head_sha: str) -> dict:
         result = self._transport(
             "PUT",

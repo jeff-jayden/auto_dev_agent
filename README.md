@@ -447,7 +447,22 @@ python -m pytest -q
 | **实时状态** | `GET /api/tasks/{id}/stream` | 通过 SSE 订阅任务事件 |
 | **评测** | `POST /api/evaluations/run` | 运行 Golden Cases 与 RAG 对比评测 |
 
-### 当前边界
+### 真实需求的 RAG 标注与评测闭环
+
+左侧 **更多 → RAG 评测** 可独立使用，不必先选择任务。
+
+1. 选择仓库，提取“已合入 PR”或“所有历史需求”的候选文件。来源包含 GitHub PR 文件、技术方案及开发尝试；重复导入不会覆盖人工标注。
+2. 逐条确认需求，把候选标成 **必要 / 辅助 / 无关**；可从开发前基线补充漏掉的文件。保存草稿不参与评测，必须人工确认且至少有一个必要文件。新建文件在开发前不存在，不能作为召回答案。
+3. 将样本分为开发集（调参）与测试集（保留验收），点击“评测已确认样本”。同仓库完全相同的需求、带 `followup_of` 关联的后续任务不允许跨组重复；近似需求及未关联的重复任务仍需人工放在同组，避免泄漏。
+4. 对同一需求、同一开发前 Git 快照、同一 Top K，对比旧混合检索与 Embedding + Chroma 检索，展示 Recall@K、必要文件 Recall@K、Precision@K、MRR、Hit@K、查询耗时和逐条召回。
+
+基线从任务保存的 `repository_analysis.head_sha` 获取，不以当前 HEAD 或合入后 PR 的 base.sha 代替。评测通过 `git archive` 导出临时快照，不 checkout/reset 工作仓库；缺少历史基线的样本会明确报错。远端 PR 文件只是候选，不能自动当标准答案。GitHub 未配置时会提示仅有本地历史来源。
+
+标签及版本保存在 `runtime/agent.db` 的 `rag_cases`，评测报告及本次标签快照保存在 `rag_dataset_runs`。未确认/排除样本不计分，运行失败的样本会显示原因及实际覆盖数，不伪造为 0 分。指标为逐需求宏平均；Precision@K 使用固定 K 为分母，必要文件 Recall 只看必要标签，其余相关性指标使用必要+辅助标签。小样本及不完整标注不能代表生产准确率。
+
+接口：`GET /api/rag/dataset`、`POST /api/rag/dataset/import`、`PUT /api/rag/dataset/cases/{id}`、`GET /api/rag/dataset/cases/{id}/files`、`POST /api/rag/dataset/evaluate`。第一版评测为同步接口，运行期间页面显示执行中；需要 Embedding/Chroma 服务可用。
+
+### 当前边界（部署与集成）
 
 - Redis/Celery 已将任务分发与 FastAPI 进程解耦；本地脚本使用 Windows `solo` Worker，启动多个 Worker 进程可以并行处理不同需求
 - SQLite 仍承载业务数据和 Checkpointer；当前适合单机少量 Worker，高并发或跨机器部署前应迁移到 PostgreSQL

@@ -1,0 +1,23 @@
+/* RAG 标注与评测工作台：局部布局，不改变需求/开发/CR 页面。 */
+#rag-view { display: flex; flex-direction: column; gap: 16px; }
+#rag-view.hidden { display: none; }
+#rag-view .panel { flex: none; }
+#rag-view h2 { margin-bottom: 12px; }
+#rag-view p { line-height: 1.65; margin: 10px 0; }
+.rag-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.rag-toolbar label { min-width: 120px; flex: 1; }
+.rag-toolbar input[type=number] { max-width: 120px; }
+.rag-label-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
+#rag-case-list { max-height: 660px; overflow: auto; margin-top: 12px; }
+.rag-case { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px; text-align: left; white-space: normal; }
+.rag-case span { font-weight: normal; line-height: 1.5; overflow-wrap: anywhere; }
+.rag-case small, .rag-table small { display: block; font-size: 13px; color: #64748b; font-weight: normal; margin-top: 4px; }
+.rag-case.selected { border-color: #2563eb; background: #eff6ff; }
+.rag-table-scroll { overflow: auto; max-height: 520px; }
+.rag-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.rag-table th, .rag-table td { text-align: left; padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+.rag-table code { font-size: 14px; overflow-wrap: anywhere; }
+.rag-table select { min-width: 200px; }
+.rag-warning { color: #92400e; background: #fffbeb; border-left: 3px solid #d97706; padding: 10px; overflow-wrap: anywhere; }
+.rag-case-detail { border-bottom: 1px solid #e2e8f0; padding: 12px 0; overflow-wrap: anywhere; }
+@media (max-width: 1050px) { .rag-label-layout { grid-template-columns: minmax(0, 1fr); } #rag-case-list { max-height: 300px; } }

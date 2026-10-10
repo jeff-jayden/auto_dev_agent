@@ -200,7 +200,7 @@ class RetrievalEvaluator:
         return {"version": 2, "files": records}
 
 
-def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCodeIndex, k: int = 3) -> dict:
+def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCodeIndex, k: int = 3, *, repository_identity: str | None = None, baseline_sha: str | None = None) -> dict:
     """同一工作区/同一标签对比旧混合检索与真实 RAG；不把契约假数据当线上效果。"""
     from repository.analyzer import RepositoryAnalyzer
     if indexer.vector_store is None:
@@ -208,8 +208,11 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
     if k < 1 or not dataset.get("cases"):
         raise ValueError("评测需要正整数 k 和非空 cases")
     files = RepositoryAnalyzer._list_files(repository)
-    head = RepositoryAnalyzer._git(repository, "rev-parse", "HEAD")
+    head = baseline_sha or RepositoryAnalyzer._git(repository, "rev-parse", "HEAD")
     index, mode, _ = indexer.build(repository, files, head)
+    if repository_identity:
+        # 临时导出目录不是仓库身份，避免重复评测生成无数向量集合。
+        index = {**index, "repository": repository_identity}
     labels = dataset["cases"]
     for case in labels:
         if not case.get("query", "").strip() or not case.get("expected_files"):

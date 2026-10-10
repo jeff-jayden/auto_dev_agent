@@ -131,8 +131,52 @@ class SQLiteTaskStore:
                     data TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS rag_cases (
+                    id TEXT PRIMARY KEY,
+                    revision INTEGER NOT NULL,
+                    data TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rag_dataset_runs (
+                    id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
+
+    def list_rag_cases(self) -> list[dict]:
+        """候选和人工确认标签独立于任务保存，不修改原始任务。"""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT data FROM rag_cases ORDER BY updated_at DESC, id").fetchall()
+        return [json.loads(row["data"]) for row in rows]
+
+    def save_rag_case(self, case: dict, expected_revision: int | None = None) -> bool:
+        with self._connect() as connection:
+            if expected_revision is None:
+                cursor = connection.execute(
+                    "INSERT OR IGNORE INTO rag_cases(id,revision,data,updated_at) VALUES(?,?,?,?)",
+                    (case["id"], case["revision"], json.dumps(case, ensure_ascii=False), case["updated_at"]),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE rag_cases SET revision=?,data=?,updated_at=? WHERE id=? AND revision=?",
+                    (case["revision"], json.dumps(case, ensure_ascii=False), case["updated_at"], case["id"], expected_revision),
+                )
+            return cursor.rowcount == 1
+
+    def save_rag_dataset_run(self, report: dict) -> dict:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO rag_dataset_runs(id,data,created_at) VALUES(?,?,?)",
+                (report["id"], json.dumps(report, ensure_ascii=False), report["created_at"]),
+            )
+        return report
+
+    def latest_rag_dataset_run(self) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT data FROM rag_dataset_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+        return json.loads(row["data"]) if row else None
 
     def save_repository(self, repository: Repository) -> Repository:
         """新增或更新一个已注册仓库。
