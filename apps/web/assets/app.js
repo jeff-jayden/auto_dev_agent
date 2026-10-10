@@ -823,7 +823,7 @@ function renderDevelopmentProgress(task, progress) {
   const spans = progress.spans || [];
   const activeSpan = [...spans].reverse().find((span) => span.status === "running") || spans[spans.length - 1] || null;
   const activity = describeAgentActivity(activeSpan, job, task);
-  const plannedSteps = task.technical_plan.development_steps || [];
+  const plannedSteps = task.technical_plan?.development_steps || [];
   const executions = task.step_executions || [];
   const activeExecution = executions.find((item) => item.status === "running")
     || executions.find((item) => item.status === "failed")
@@ -1027,22 +1027,24 @@ async function render(task) {
   $("#status-badge").className = `status ${task.status}`;
   $("#retry-task-button").classList.toggle("hidden", task.status !== "failed");
   $("#rerun-task-button").classList.toggle("hidden", !["merged", "rejected"].includes(task.status));
-  $("#summary").textContent = task.analysis.summary;
-  list($("#criteria"), task.analysis.acceptance_criteria); list($("#assumptions"), task.analysis.assumptions);
-  $("#approach").textContent = task.technical_plan.approach;
-  $("#files").innerHTML = task.technical_plan.affected_files.map((file) => `<code>${escapeHtml(file)}</code>`).join("");
-  list($("#steps"), task.technical_plan.implementation_steps); list($("#risks"), task.technical_plan.risks);
+  const requirementAnalysis = task.analysis || {};
+  const plan = task.technical_plan || {};
+  $("#summary").textContent = requirementAnalysis.summary || task.error || "需求分析尚未完成";
+  list($("#criteria"), requirementAnalysis.acceptance_criteria); list($("#assumptions"), requirementAnalysis.assumptions);
+  $("#approach").textContent = plan.approach || "尚未生成有效技术方案，请补充意见后重新生成。";
+  $("#files").innerHTML = (plan.affected_files || []).map((file) => `<code>${escapeHtml(file)}</code>`).join("");
+  list($("#steps"), plan.implementation_steps); list($("#risks"), plan.risks);
 
-  const plannedSteps = task.technical_plan.development_steps || [];
+  const plannedSteps = plan.development_steps || [];
   const stepExecutions = new Map((task.step_executions || []).map((item) => [item.step_id, item]));
   const completedStepCount = [...stepExecutions.values()].filter((item) => item.status === "completed").length;
   $("#development-step-summary").textContent = plannedSteps.length
     ? `已完成 ${completedStepCount}/${plannedSteps.length} · 每一步只允许修改批准文件`
     : "旧任务按单步骤兼容执行";
-  const displayedSteps = plannedSteps.length ? plannedSteps : [{
-    id: "legacy-step", title: "完成批准方案", objective: task.technical_plan.approach,
-    allowed_files: task.technical_plan.affected_files, acceptance_checks: task.technical_plan.test_plan || [],
-  }];
+  const displayedSteps = plannedSteps.length ? plannedSteps : task.technical_plan ? [{
+    id: "legacy-step", title: "完成批准方案", objective: plan.approach,
+    allowed_files: plan.affected_files, acceptance_checks: plan.test_plan || [],
+  }] : [];
   $("#development-steps").innerHTML = displayedSteps.map((step, index) => {
     const execution = stepExecutions.get(step.id) || {status: "pending", changed_files: [], attempt_count: 0};
     const labels = {pending: "待执行", running: "执行中", paused: "已暂停", completed: "已完成", failed: "失败"};
@@ -1060,7 +1062,7 @@ async function render(task) {
     openDevelopmentDiff(paths).catch((error) => notify(error.message));
   }));
 
-  const analysis = task.repository_analysis;
+  const analysis = task.repository_analysis || {};
   $("#repo-facts").innerHTML = [
     ["语言", analysis.language], ["框架", analysis.framework || "未识别"],
     ["分支", analysis.default_branch || "非 Git 模板"], ["基线", analysis.head_sha ? analysis.head_sha.slice(0, 8) : "无"],
@@ -1072,8 +1074,8 @@ async function render(task) {
     ["辅助上下文", contextPack.dependency_files, "调用方、样式与其他召回，仅供阅读参考"],
     ["相关测试", contextPack.test_files, `基线 ${contextPack.baseline_sha ? contextPack.baseline_sha.slice(0, 8) : "无"}`],
   ].map(([label, paths, detail]) => `<div class="context-group"><b>${label}</b><small>${escapeHtml(detail)}</small>${paths.map((path) => `<code title="${escapeHtml(path)}">${escapeHtml(path)}</code>`).join("") || "<small>未检索到</small>"}</div>`).join("") : "";
-  $("#evidence").innerHTML = (task.technical_plan.evidence || []).map((item) => `<div class="evidence"><code>${escapeHtml(item.path)}:${item.line}</code><p>${escapeHtml(item.snippet)}</p><small>${escapeHtml(item.reason)}</small></div>`).join("") || "<p>当前未找到足够的行级证据，需要在开发阶段继续检索。</p>";
-  $("#tool-calls").innerHTML = analysis.tool_calls.map((item) => `<span>✓ ${escapeHtml(item.tool)} · ${escapeHtml(item.summary)}</span>`).join("");
+  $("#evidence").innerHTML = (plan.evidence || []).map((item) => `<div class="evidence"><code>${escapeHtml(item.path)}:${item.line}</code><p>${escapeHtml(item.snippet)}</p><small>${escapeHtml(item.reason)}</small></div>`).join("") || "<p>当前未找到足够的行级证据，需要在开发阶段继续检索。</p>";
+  $("#tool-calls").innerHTML = (analysis.tool_calls || []).map((item) => `<span>${item.success === false ? "✗" : "✓"} ${escapeHtml(item.tool)} · ${escapeHtml(item.summary)}</span>`).join("");
 
   const attempts = task.development_attempts || [];
   $("#development-panel").classList.toggle("hidden", attempts.length === 0);
@@ -1102,6 +1104,7 @@ async function render(task) {
   renderDevelopmentProgress(task, progress);
   renderTimeline(events, new Map(), task.id);
   $("#approval-panel").classList.toggle("hidden", !["waiting_requirement_approval", "waiting_requirement_input"].includes(task.status));
+  $("#approve-button").disabled = !task.analysis || !task.technical_plan;
   const hasResult = Boolean(task.result); $("#result-panel").classList.toggle("hidden", !hasResult);
   let diffFiles = [];
   try {

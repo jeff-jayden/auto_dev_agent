@@ -404,15 +404,9 @@ class TaskOrchestrator:
         span = self.tracer.span("agent.requirement_planning", kind="agent") if self.tracer else None
         if span:
             with span:
-                task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
-                    task.title, task.requirement, task.repository_analysis,
-                    task.design_reference.context if task.design_reference else "",
-                )
+                self._generate_requirement_plan(task, task.requirement, Path(state["repository"].local_path))
         else:
-            task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
-                task.title, task.requirement, task.repository_analysis,
-                task.design_reference.context if task.design_reference else "",
-            )
+            self._generate_requirement_plan(task, task.requirement, Path(state["repository"].local_path))
         task.metadata["planning_head_sha"] = task.repository_analysis.head_sha
         task.metadata["index_version"] = (
             task.repository_analysis.context_pack.index_version
@@ -422,6 +416,31 @@ class TaskOrchestrator:
         self._transition(task, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
         self._event(task, "plan_ready", "需求分析和技术方案已生成，等待人工审批")
         return {"task": task}
+
+    def _generate_requirement_plan(self, task: Task, requirement: str, repository_root: Path) -> None:
+        """规划失败保留原因和探索审计，等待重新生成；禁止用模板伪装审批方案。"""
+        try:
+            task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
+                task.title, requirement, task.repository_analysis,
+                task.design_reference.context if task.design_reference else "",
+                repository_root=repository_root,
+            )
+            task.error = None
+        except ValueError as error:
+            task.error = str(error)
+            task.analysis = None
+            task.technical_plan = None
+            task.approval = None
+            if task.status == TaskStatus.DEVELOPING:
+                self._transition(task, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
+            if task.status == TaskStatus.WAITING_REQUIREMENT_APPROVAL:
+                self._transition(task, TaskStatus.REQUIREMENT_ANALYSIS)
+            if task.status == TaskStatus.REQUIREMENT_ANALYSIS:
+                self._transition(task, TaskStatus.WAITING_REQUIREMENT_INPUT)
+            else:
+                self.store.save_task(task)
+            self._event(task, "planning_failed", task.error)
+            raise
 
     def approve(
         self,
@@ -1215,10 +1234,7 @@ class TaskOrchestrator:
         task.repository_analysis = self.repository_analyzer.analyze(
             repository_path, task.requirement
         )
-        task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
-            task.title, task.requirement, task.repository_analysis,
-            task.design_reference.context if task.design_reference else "",
-        )
+        self._generate_requirement_plan(task, task.requirement, repository_path)
         task.approval = None
         task.error = None
         task.metadata["planning_head_sha"] = task.repository_analysis.head_sha
@@ -2323,10 +2339,7 @@ class TaskOrchestrator:
         if repository is None:
             raise ValueError("Repository not found")
         task.repository_analysis = self.repository_analyzer.analyze(Path(repository.local_path), enriched_requirement)
-        task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
-            task.title, enriched_requirement, task.repository_analysis,
-            task.design_reference.context if task.design_reference else "",
-        )
+        self._generate_requirement_plan(task, enriched_requirement, Path(repository.local_path))
         self._transition(task, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
         task.metadata["planning_head_sha"] = task.repository_analysis.head_sha
         task.metadata["index_version"] = self.repository_analyzer.index_version

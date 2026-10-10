@@ -23,6 +23,14 @@ from domain.models import (
 from repository import RepositoryAnalyzer
 
 
+class FixturePlanningAgent(RequirementPlanningAgent):
+    """这些开发链路用例只模拟单步补丁，不使用真实模型规划。"""
+    def plan(self, *args, **kwargs):
+        analysis, plan = super().plan(*args, **kwargs)
+        plan.development_steps = []
+        return analysis, plan
+
+
 class RepositoryAnalysisTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -226,6 +234,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
             orchestrator = build_orchestrator(
                 self.root / "runtime-head-drift", EnabledGateway()
             )
+        orchestrator.requirement_planning_agent = FixturePlanningAgent()
         repository = orchestrator.repository_catalog.register("Sample", self.repository)
         task = orchestrator.create_task(
             "导出用户", "管理员可以调用 export_users 导出 CSV 用户列表。", repository.id
@@ -384,6 +393,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
         runtime = self.root / "runtime-model"
         with patch.dict(os.environ, {"AGENT_ALLOWED_REPOSITORY_ROOTS": str(self.root)}):
             orchestrator = build_orchestrator(runtime, FakeDeveloperGateway())
+        orchestrator.requirement_planning_agent = FixturePlanningAgent()
         repository = orchestrator.repository_catalog.register("Sample", self.repository)
         task = orchestrator.create_task("导出用户", "管理员可以调用 export_users 导出 CSV 用户列表。", repository.id)
         completed = orchestrator.approve(task.id, "reviewer", "同意开发")
@@ -462,6 +472,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
         gateway = RepairGateway()
         with patch.dict(os.environ, {"AGENT_ALLOWED_REPOSITORY_ROOTS": str(self.root)}):
             orchestrator = build_orchestrator(self.root / "runtime-repair", gateway)
+        orchestrator.requirement_planning_agent = FixturePlanningAgent()
         repository = orchestrator.repository_catalog.register("Sample", self.repository)
         task = orchestrator.create_task("导出用户", "管理员可以调用 export_users 导出 CSV 用户列表。", repository.id)
         completed = orchestrator.approve(task.id, "reviewer", "同意开发")
@@ -624,6 +635,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"AGENT_ALLOWED_REPOSITORY_ROOTS": str(self.root)}):
             orchestrator = build_orchestrator(self.root / "runtime-checkpoint", CheckpointGateway())
+        orchestrator.requirement_planning_agent = FixturePlanningAgent()
         repository = orchestrator.repository_catalog.register("Sample", self.repository)
         task = orchestrator.create_task(
             "导出用户",

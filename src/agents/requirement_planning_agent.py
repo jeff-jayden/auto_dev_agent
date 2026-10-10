@@ -4,6 +4,7 @@
 """
 
 import json
+import subprocess
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -51,10 +52,11 @@ class RequirementPlanningAgent:
         requirement: str,
         repository: RepositoryAnalysis,
         design_context: str = "",
+        repository_root: Path | None = None,
     ) -> tuple[RequirementAnalysis, TechnicalPlan]:
         if self.model_gateway.enabled:
             response = self._request_model_plan(
-                title, requirement, repository, design_context,
+                title, requirement, repository, design_context, repository_root,
             )
             if isinstance(response, RequirementPlanningResponse):
                 context_paths = {
@@ -65,9 +67,8 @@ class RequirementPlanningAgent:
                     new_paths = validate_component_requests(response.plan.new_files)
                     if any(path in known for path in new_paths):
                         raise ValueError("New component already exists in repository evidence")
-                except ValueError:
-                    new_paths = []
-                    response = None
+                except ValueError as error:
+                    raise ValueError(f"规划失败：新增文件申请无效：{error}") from error
                 if response is not None and all(path in known or path in new_paths for path in response.plan.affected_files):
                     response.plan.affected_files = list(dict.fromkeys([*response.plan.affected_files, *new_paths]))
                     if repository.framework == "react":
@@ -81,6 +82,8 @@ class RequirementPlanningAgent:
                     self.ensure_dependency_scope(response.plan, repository, requirement)
                     self.ensure_development_steps(response.plan, repository, generate_when_missing=False)
                     return response.analysis, response.plan
+            detail = getattr(self.model_gateway, "last_error", "") or "模型没有返回有效方案，或方案包含未经确认的文件"
+            raise ValueError(f"规划失败：{detail[:600]}。请重新生成方案，不会使用通用模板代替。")
         return self.analyze(title, requirement), self.design(repository, requirement)
 
     def _request_model_plan(
@@ -89,10 +92,13 @@ class RequirementPlanningAgent:
         requirement: str,
         repository: RepositoryAnalysis,
         design_context: str,
+        repository_root: Path | None = None,
     ) -> RequirementPlanningResponse | None:
         system_prompt = (
             "你是资深软件架构师组成的 Plan Agent。只能根据已验证的仓库事实生成需求分析和技术方案，"
             "不得虚构文件。你可以自主决定是否调用只读规划工具补充仓库概览、候选文件和代码证据。"
+            "RAG 片段足够则直接规划；片段不足时用 read_file 分页读取真实源码。不要重复查询相同内容，"
+            "最多探索 8 次工具调用，信息不足必须明确说明，接近预算时立即提交最终方案。"
             "primary_files 仅为核心实现候选，dependency_files 为只读辅助上下文，不是修改清单。"
             "逐个判断需求是否真的需要改动文件；不要因文件被召回、是入口或调用方就自动加入 affected_files。"
             "新增组件必须在 new_files 中申请具体路径和需求依据 reason，只允许 src/pages 或 src/components 下的 js/jsx/ts/tsx 文件，禁止目录通配符。必须同时规划创建、导出及已有入口的导入渲染。affected_files 可使用这些申请路径及工具或输入中出现的真实路径。用户可见行为变更必须把仓库中已有的"
@@ -110,15 +116,18 @@ class RequirementPlanningAgent:
                 "test_command": repository.test_command,
                 "entrypoints": repository.entrypoints,
                 "important_files": repository.important_files,
+                "evidence": [item.model_dump(mode="json") for item in repository.evidence],
                 "context_pack": (
-                    repository.context_pack.model_dump(mode="json")
+                    repository.context_pack.model_dump(mode="json", include={
+                        "baseline_sha", "primary_files", "dependency_files", "test_files",
+                    })
                     if repository.context_pack else None
                 ),
             },
             "figma_design_context": design_context[:30000],
         }
+        registry = RequirementPlanningToolRegistry(repository, repository_root)
         if callable(getattr(self.model_gateway, "build_langchain_model", None)):
-            registry = RequirementPlanningToolRegistry(repository)
             try:
                 model = self.model_gateway.build_langchain_model()
                 agent = create_agent(
@@ -144,7 +153,7 @@ class RequirementPlanningAgent:
                             "role": "user",
                             "content": json.dumps(payload, ensure_ascii=False),
                         }]},
-                        config={"recursion_limit": 12},
+                        config={"recursion_limit": 24},
                     )
                     response = result.get("structured_response") if isinstance(result, dict) else None
                     if span is not None:
@@ -163,7 +172,8 @@ class RequirementPlanningAgent:
                     summary="Plan Agent 已完成需求分析和技术方案生成",
                     success=isinstance(response, RequirementPlanningResponse),
                 ))
-                return response if isinstance(response, RequirementPlanningResponse) else None
+                if isinstance(response, RequirementPlanningResponse):
+                    return response
             except Exception as error:
                 repository.tool_calls.append(ToolCallAudit(
                     tool="requirement_planning.langchain_fallback",
@@ -172,15 +182,32 @@ class RequirementPlanningAgent:
                     success=False,
                 ))
 
-        return self.model_gateway.generate_structured(
+        # 已补读的源码不再重复附带同文件的预览证据；保留原始需求和实际读取内容。
+        read_paths = {call["arguments"].get("path") for call in registry.calls
+                      if call["tool"] == "read_file" and "error" not in call["result"]}
+        final_payload = {**payload, "verified_repository_summary": {
+            **payload["verified_repository_summary"],
+            "evidence": [item for item in payload["verified_repository_summary"]["evidence"] if item["path"] not in read_paths],
+        }}
+        response = self.model_gateway.generate_structured(
             system_prompt + "输出严格 JSON。",
             json.dumps({
-                **payload,
-                "repository": repository.model_dump(mode="json"),
+                **final_payload,
+                "exploration_results": registry.calls,
+                "instruction": "探索已结束，使用以上真实读取结果直接输出最终方案，不再调用工具。",
                 "output_schema": RequirementPlanningResponse.model_json_schema(),
             }, ensure_ascii=False),
             RequirementPlanningResponse,
         )
+        valid = isinstance(response, RequirementPlanningResponse)
+        repository.tool_calls.append(ToolCallAudit(
+            tool="requirement_planning.finalize",
+            arguments={"exploration_calls": registry.attempts},
+            summary="已基于检索与补读结果生成最终方案" if valid else
+                f"最终方案生成失败：{str(getattr(self.model_gateway, 'last_error', '') or '未返回有效结构化方案')[:600]}",
+            success=valid,
+        ))
+        return response
 
     def analyze(self, title: str, requirement: str) -> RequirementAnalysis:
         base_requirement, _, feedback = requirement.partition("用户补充意见：")
@@ -423,10 +450,16 @@ class EvidenceInput(PlanningReasonInput):
     path: str = Field(default="", max_length=500, description="可选的仓库相对路径；为空时返回全部证据")
 
 
+class PlanningFileInput(PlanningReasonInput):
+    path: str = Field(max_length=500, description="已确认的仓库相对文件路径")
+    start_line: int = Field(default=1, ge=1)
+    end_line: int = Field(default=120, ge=1)
+
+
 class RequirementPlanningToolRegistry:
     """Read-only LangChain tools over the verified repository analysis."""
 
-    def __init__(self, repository: RepositoryAnalysis):
+    def __init__(self, repository: RepositoryAnalysis, repository_root: Path | None = None):
         """基于已验证的仓库分析结果注册只读规划工具。
 
         Args:
@@ -434,6 +467,14 @@ class RequirementPlanningToolRegistry:
         """
         self.repository = repository
         self.calls: list[dict[str, Any]] = []
+        self.root = repository_root.resolve() if repository_root else None
+        self.seen: set[str] = set()
+        self.attempts = 0
+        context = repository.context_pack
+        self.known_paths = set(repository.important_files) | set(repository.entrypoints) | {item.path for item in repository.evidence}
+        if context:
+            self.known_paths.update([*context.primary_files, *context.dependency_files, *context.test_files])
+            self.known_paths.update(item.path for item in context.files)
 
         @tool("get_repository_overview", args_schema=PlanningReasonInput)
         def get_repository_overview(reason: str = ""):
@@ -472,15 +513,26 @@ class RequirementPlanningToolRegistry:
 
         @tool("get_code_evidence", args_schema=EvidenceInput)
         def get_code_evidence(path: str = "", reason: str = ""):
-            """查看仓库分析采集的代码行证据；需要确认文件职责或需求命中位置时使用。"""
+            """定位初始输入中已有 RAG 证据的行号；完整片段已在输入中，缺失源码请 read_file。"""
             normalized = path.replace("\\", "/").strip()
             evidence = [
-                item.model_dump(mode="json") for item in repository.evidence
+                {"path": item.path, "line": item.line, "reason": item.reason}
+                for item in repository.evidence
                 if not normalized or item.path == normalized
             ][:30]
-            return self._record("get_code_evidence", {"path": normalized}, reason, evidence)
+            return self._record("get_code_evidence", {"path": normalized}, reason, {
+                "evidence_locations": evidence,
+                "instruction": "完整 RAG 片段已在初始输入 evidence 中。需要更多源码请 read_file 指定行区间，不要重复查询证据。",
+            })
 
-        tools = [get_repository_overview, list_planning_files, get_code_evidence]
+        @tool("read_file", args_schema=PlanningFileInput)
+        def read_file(path: str, start_line: int = 1, end_line: int = 120, reason: str = ""):
+            """RAG 代码片段不足时，分页读取已确认文件的源码（含行号），每次最多 120 行。"""
+            normalized = path.replace("\\", "/").strip()
+            arguments = {"path": normalized, "start_line": start_line, "end_line": end_line}
+            return self._record("read_file", arguments, reason, lambda: self._read_file(normalized, start_line, end_line))
+
+        tools = [get_repository_overview, list_planning_files, get_code_evidence, read_file]
         self._tools = {item.name: item for item in tools}
 
     @property
@@ -492,6 +544,19 @@ class RequirementPlanningToolRegistry:
         return list(self._tools)
 
     def _record(self, name: str, arguments: dict[str, Any], reason: str, result: Any) -> Any:
+        self.attempts += 1
+        if self.attempts > 8:
+            raise ValueError("规划探索已达到 8 次调用上限，请使用已收集证据生成方案")
+        key = json.dumps([name, arguments], sort_keys=True)
+        duplicate = key in self.seen
+        self.seen.add(key)
+        if duplicate:
+            result = {"error": "相同查询已执行，内容未变化。请使用已有结果，必要时 read_file 读取其他行，或立即生成方案。"}
+        elif callable(result):
+            try:
+                result = result()
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                result = {"error": str(error)}
         self.calls.append({
             "tool": name,
             "arguments": arguments,
@@ -502,5 +567,47 @@ class RequirementPlanningToolRegistry:
             tool=f"requirement_planning.{name}",
             arguments={"framework": "langchain.create_agent", **arguments},
             summary=reason or f"Plan Agent 自主调用 {name}",
+            success=not (isinstance(result, dict) and "error" in result),
         ))
         return result
+
+    def _read_file(self, path: str, start: int, end: int) -> dict:
+        """Git 仓库固定读取分析时 HEAD，非 Git 仅允许仓库内已确认的文本文件。"""
+        relative = Path(path)
+        if self.root is None:
+            raise ValueError("未提供仓库目录，无法补读源码")
+        if path not in self.known_paths or relative.is_absolute() or ".." in relative.parts or ":" in path:
+            raise ValueError("只能读取本次仓库已确认的相对文件路径")
+        if any(part.startswith(".") or part.lower() in {"node_modules", "runtime", "venv"} for part in relative.parts):
+            raise ValueError("不能读取隐藏文件、运行数据或依赖目录")
+        if relative.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss", ".json", ".md", ".toml", ".yaml", ".yml", ".java", ".go", ".rs", ".html"}:
+            raise ValueError("仅支持源码和项目配置文本")
+        if end < start or end - start >= 120:
+            raise ValueError("每次最多读取 120 行，且结束行不得早于开始行")
+        target = self.root / relative
+        if self.root not in target.resolve().parents:
+            raise ValueError("文件路径越出仓库")
+        if any(part.is_symlink() or part.is_junction() for part in [target, *target.parents] if part != self.root and self.root in part.parents):
+            raise ValueError("不能通过链接读取文件")
+        if self.repository.head_sha:
+            # git cat-file 先检查大小与类型，避免把大文件或 Git symlink 当作源码。
+            spec = f"{self.repository.head_sha}:{path}"
+            size = subprocess.run(["git", "cat-file", "-s", spec], cwd=self.root, capture_output=True, check=True, timeout=10)
+            if int(size.stdout) > 256_000:
+                raise ValueError("文件超过 256KB，请缩小上下文范围")
+            listing = subprocess.run(["git", "ls-tree", self.repository.head_sha, "--", path], cwd=self.root, capture_output=True, check=True, timeout=10)
+            if not listing.stdout.startswith((b"100644 ", b"100755 ")):
+                raise ValueError("只允许读取基线中的普通文件")
+            content = subprocess.run(["git", "show", spec], cwd=self.root, capture_output=True, check=True, timeout=10).stdout
+        else:
+            if target.stat().st_size > 256_000:
+                raise ValueError("文件超过 256KB")
+            content = target.read_bytes()
+        if b"\x00" in content:
+            raise ValueError("不能读取二进制文件")
+        lines = content.decode("utf-8-sig").splitlines()
+        text = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines[start - 1:end], start - 1))
+        return {"path": path, "baseline_sha": self.repository.head_sha, "start_line": start,
+                "end_line": min(end, len(lines)), "total_lines": len(lines),
+                "content": text[:12000], "truncated": len(text) > 12000,
+                "has_more": end < len(lines)}
