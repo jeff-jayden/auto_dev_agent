@@ -26,7 +26,8 @@ from execution import TaskExecutionWorker
 from llm import ModelGateway, build_model_gateway
 from observability import TraceRecorder, TracingModelGateway
 from evaluation import GoldenCaseEvaluator
-from evaluation.dataset import AnnotationRequest, DatasetConflict, DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService
+from evaluation.dataset import (AnnotationRequest, BuiltinDatasetImportRequest, DatasetConflict,
+                                DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService)
 from repository import RepositoryAnalyzer, RepositoryCatalog
 from sandbox import WorkspaceManager
 from scm import GitHubClient, GitHubDeliveryService
@@ -441,6 +442,11 @@ def get_rag_dataset():
 @app.post("/api/rag/dataset/import")
 def import_rag_dataset(request: DatasetImportRequest):
     return rag_call(rag_service().import_history, request)
+
+
+@app.post("/api/rag/dataset/import-builtin")
+def import_builtin_rag_dataset(request: BuiltinDatasetImportRequest):
+    return rag_call(rag_service().import_builtin, request)
 
 
 @app.put("/api/rag/dataset/cases/{case_id}")

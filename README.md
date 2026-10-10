@@ -218,11 +218,11 @@ python -m evaluation.retrieval --repository . --dataset tests/fixtures/rag_repos
 
 同一份工作区、同一标注集对比 **原哈希混合检索 → Embedding + Chroma 混合检索**，报告包含文件级 Recall@K、MRR、Hit@K、无关文件率、平均上下文文件数、查询耗时、命中代码块行号、模型标识、HEAD 和内容指纹。首次建库/预热耗时单独记录。示例提供本项目 8 个文件级标注，属于小样本 smoke benchmark；应补充真实需求、人工校正多文件标签和独立测试集，不能把此结果直接当作开发成功率。
 
-另有 `tests/fixtures/cfe_unit_commit_rag_cases.json`，包含 `cfe-unit` 最终完整代码快照上的 48 条历史需求文件召回标签。标签来自原始 R02–R49 功能提交并经过文件职责校正；R01、R50 仅修改文档，因此不纳入代码召回。运行前应确认目标仓库 HEAD 与数据集中的 `repository_head_sha` 一致：
+内置的 `src/evaluation/datasets/cfe_unit_commit_rag_cases.json` 包含 `cfe-unit` 最终完整代码快照上的 48 条历史需求文件召回标签。标签来自原始 R02–R49 功能提交并经过文件职责校正；R01、R50 仅修改文档，因此不纳入代码召回。可以直接从 RAG 评测页导入，也可以通过命令行运行：
 
 ```powershell
 python -m evaluation.retrieval --repository E:\aiTraval\playground\cfe-unit `
-  --dataset tests/fixtures/cfe_unit_commit_rag_cases.json --k 3 `
+  --dataset src/evaluation/datasets/cfe_unit_commit_rag_cases.json --k 3 `
   --output runtime/evaluations/cfe-unit-rag-ab.json
 ```
 
@@ -459,7 +459,7 @@ python -m pytest -q
 
 左侧 **更多 → RAG 评测** 可独立使用，不必先选择任务。
 
-1. 选择仓库，提取“已合入 PR”或“所有历史需求”的候选文件。来源包含 GitHub PR 文件、技术方案及开发尝试；重复导入不会覆盖人工标注。
+1. 若要直接验证文件召回，点击 **导入 cfe-unit 48 条测试集**。页面会自动匹配包含固定快照的已注册仓库，把样本设为“已确认 / 测试集”；`src/reportWebVitals.js` 与 `src/setupTests.js` 不属于任何核心答案，且不在固定快照中。也可以选择仓库，提取“已合入 PR”或“所有历史需求”的候选文件。重复导入不会覆盖已有标注。
 2. 逐条确认需求，把候选标成 **必要 / 辅助 / 无关**；可从开发前基线补充漏掉的文件。保存草稿不参与评测，必须人工确认且至少有一个必要文件。新建文件在开发前不存在，不能作为召回答案。
 3. 将样本分为开发集（调参）与测试集（保留验收），点击“评测已确认样本”。同仓库完全相同的需求、带 `followup_of` 关联的后续任务不允许跨组重复；近似需求及未关联的重复任务仍需人工放在同组，避免泄漏。
 4. 对同一需求、同一开发前 Git 快照、同一 Top K，对比旧混合检索与 Embedding + Chroma 检索，展示 Recall@K、必要文件 Recall@K、Precision@K、MRR、Hit@K、查询耗时和逐条召回。
@@ -468,7 +468,7 @@ python -m pytest -q
 
 标签及版本保存在 `runtime/agent.db` 的 `rag_cases`，评测报告及本次标签快照保存在 `rag_dataset_runs`。未确认/排除样本不计分，运行失败的样本会显示原因及实际覆盖数，不伪造为 0 分。指标为逐需求宏平均；Precision@K 使用固定 K 为分母，必要文件 Recall 只看必要标签，其余相关性指标使用必要+辅助标签。小样本及不完整标注不能代表生产准确率。
 
-接口：`GET /api/rag/dataset`、`POST /api/rag/dataset/import`、`PUT /api/rag/dataset/cases/{id}`、`GET /api/rag/dataset/cases/{id}/files`、`POST /api/rag/dataset/evaluate`。第一版评测为同步接口，运行期间页面显示执行中；需要 Embedding/Chroma 服务可用。
+接口：`GET /api/rag/dataset`、`POST /api/rag/dataset/import`、`POST /api/rag/dataset/import-builtin`、`PUT /api/rag/dataset/cases/{id}`、`GET /api/rag/dataset/cases/{id}/files`、`POST /api/rag/dataset/evaluate`。第一版评测为同步接口，运行期间页面显示执行中；需要 Embedding/Chroma 服务可用。
 
 ### 当前边界（部署与集成）
 

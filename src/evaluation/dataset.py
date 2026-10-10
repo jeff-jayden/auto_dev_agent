@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import subprocess
 import tarfile
@@ -30,6 +31,10 @@ class DatasetImportRequest(BaseModel):
     repository_id: str | None = None
 
 
+class BuiltinDatasetImportRequest(BaseModel):
+    repository_id: str | None = None
+
+
 class AnnotationRequest(BaseModel):
     revision: int = Field(ge=1)
     query: str = Field(min_length=3, max_length=8000)
@@ -51,11 +56,15 @@ class DatasetConflict(ValueError):
 
 
 class RagDatasetService:
-    def __init__(self, store, github=None, *, runtime_root: Path, indexer_factory=None):
+    def __init__(self, store, github=None, *, runtime_root: Path, indexer_factory=None,
+                 builtin_dataset_path: Path | None = None):
         self.store = store
         self.github = github
         self.runtime = runtime_root.resolve()
         self.indexer_factory = indexer_factory or (lambda: RepositoryCodeIndex.from_environment(self.runtime / "indexes"))
+        self.builtin_dataset_path = builtin_dataset_path or (
+            Path(__file__).resolve().parent / "datasets" / "cfe_unit_commit_rag_cases.json"
+        )
         self._evaluation_lock = threading.Lock()
 
     @staticmethod
@@ -112,6 +121,91 @@ class RagDatasetService:
                 errors.append({"task_id": task.id, "title": task.title, "reason": str(error)[:600]})
         return {"created": created, "skipped": skipped, "errors": errors,
                 "message": "候选仅供人工审核；重复导入不会覆盖已有标注"}
+
+    def import_builtin(self, request: BuiltinDatasetImportRequest) -> dict:
+        """将随项目提供的 cfe-unit 提交数据集导入人工标注表。"""
+        try:
+            manifest = json.loads(self.builtin_dataset_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError("内置 cfe-unit RAG 数据集不可用") from error
+
+        pinned_sha = str(manifest.get("repository_head_sha", ""))
+        repositories = ([self.store.get_repository(request.repository_id)] if request.repository_id
+                        else self.store.list_repositories())
+        repositories = [repository for repository in repositories
+                        if repository is not None and Path(repository.local_path).is_dir()]
+        matches = []
+        for repository in repositories:
+            try:
+                full_sha, files = self._base_files(Path(repository.local_path), pinned_sha)
+            except ValueError:
+                continue
+            matches.append((repository, full_sha, set(files)))
+        if not matches:
+            detail = "所选仓库" if request.repository_id else "已注册仓库"
+            raise ValueError(f"{detail}不包含内置数据集固定的 cfe-unit 代码快照")
+        if len(matches) > 1:
+            raise ValueError("多个仓库包含该快照，请先在页面选择要评测的 cfe-unit 仓库")
+
+        repository, full_sha, available = matches[0]
+        dataset_name = str(manifest.get("name", "cfe-unit-commit-file-recall-v1"))
+        irrelevant = [path for path in manifest.get("known_irrelevant_files", [])
+                      if self._safe_path(path) and path in available and self._indexable(path)]
+        existing = {case["source_task_id"] for case in self.store.list_rag_cases()}
+        created, skipped, errors = [], [], []
+        for item in manifest.get("cases", []):
+            requirement_id = str(item.get("requirement_id", ""))
+            query = requirement_id
+            source_id = f"builtin:{dataset_name}:{requirement_id}:{repository.id}"
+            if source_id in existing:
+                skipped.append(source_id)
+                continue
+            try:
+                query = str(item["query"]).strip()
+                expected = list(dict.fromkeys(item["expected_files"]))
+                invalid = [path for path in expected
+                           if not self._safe_path(path) or path not in available or not self._indexable(path)]
+                if not query or not expected or invalid:
+                    raise ValueError(f"固定快照中缺少有效答案文件：{', '.join(invalid) or '未提供答案'}")
+                labels = [(path, "required", "builtin_commit_gold") for path in expected]
+                labels.extend((path, "irrelevant", "builtin_negative") for path in irrelevant if path not in expected)
+                timestamp = now()
+                case = {
+                    "id": hashlib.sha256(source_id.encode()).hexdigest()[:24],
+                    "source_task_id": source_id,
+                    "group_id": source_id,
+                    "title": f"{requirement_id} {query}",
+                    "original_requirement": query,
+                    "query": query,
+                    "repository_id": repository.id,
+                    "repository_name": repository.name,
+                    "base_sha": full_sha,
+                    "pr_url": None,
+                    "pr_number": None,
+                    "sources": ["builtin_commit_dataset"],
+                    "warnings": ["内置提交召回集使用最终完整代码快照，不代表单条需求的开发前基线。"],
+                    "candidates": [{"path": path, "sources": [source], "exists_at_base": True,
+                                    "indexable": True, "label": label}
+                                   for path, label, source in labels],
+                    "state": "confirmed",
+                    "split": "test",
+                    "revision": 1,
+                    "actor": "内置提交数据集",
+                    "reviewed_at": timestamp,
+                    "note": f"来源提交 {item.get('source_commit', '')}",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                }
+                if self.store.save_rag_case(case):
+                    created.append(case["id"])
+                else:
+                    skipped.append(source_id)
+            except (KeyError, TypeError, ValueError) as error:
+                errors.append({"requirement_id": requirement_id, "title": query,
+                               "reason": str(error)[:600]})
+        return {"created": created, "skipped": skipped, "errors": errors,
+                "repository_id": repository.id,
+                "message": "内置样本已确认并归入测试集；重复导入不会覆盖页面中的现有标注"}
 
     def _candidate(self, task, merged_only: bool) -> dict:
         repository = self.store.get_repository(task.repository_id) if task.repository_id else None

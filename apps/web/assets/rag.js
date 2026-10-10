@@ -87,6 +87,16 @@ ragEl("rag-import").addEventListener("click", (event) => ragBusy(event.currentTa
   ragEl("rag-import-result").innerHTML = `<p>新增 ${data.created.length} · 已存在 ${data.skipped.length} · 失败 ${data.errors.length}。${escapeHtml(data.message)}</p>${data.errors.map((error) => `<p class="rag-warning">${escapeHtml(error.title)}：${escapeHtml(error.reason)}</p>`).join("")}`;
   await loadRagDataset();
 }));
+ragEl("rag-import-cfe-unit").addEventListener("click", (event) => ragBusy(event.currentTarget, async () => {
+  const data = await api("/api/rag/dataset/import-builtin", {method: "POST", body: JSON.stringify({repository_id: ragEl("rag-repository").value || null})});
+  ragEl("rag-import-result").innerHTML = `<p>cfe-unit 测试集：新增 ${data.created.length} · 已存在 ${data.skipped.length} · 失败 ${data.errors.length}。${escapeHtml(data.message)}</p>${data.errors.map((error) => `<p class="rag-warning">${escapeHtml(error.requirement_id || "样本")}：${escapeHtml(error.reason)}</p>`).join("")}`;
+  ragDirty = false;
+  await loadRagDataset();
+  ragEl("rag-repository").value = data.repository_id;
+  ragEl("rag-filter").value = "confirmed";
+  ragEl("rag-eval-split").value = "test";
+  renderRagList();
+}));
 ragEl("rag-evaluate").addEventListener("click", (event) => ragBusy(event.currentTarget, async () => {
   ragEl("rag-report").innerHTML = "<p>正在导出开发前快照并运行评测，首次生成 Embedding 可能需要一段时间…</p>";
   try {

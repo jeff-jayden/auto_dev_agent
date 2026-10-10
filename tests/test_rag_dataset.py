@@ -1,5 +1,6 @@
-"""人工标注闭环契约测试：候选不计分、基线隔离、幂等、版本冲突与指标覆盖率。"""
+"""人工标注闭环契约测试：候选不计分、内置集导入、基线隔离与指标覆盖率。"""
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from domain.models import Repository, RepositoryAnalysis, Task, TaskStatus
-from evaluation.dataset import AnnotationRequest, DatasetConflict, DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService
+from evaluation.dataset import (AnnotationRequest, BuiltinDatasetImportRequest, DatasetConflict,
+                                DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService)
 from infrastructure.store import SQLiteTaskStore
 from scm.github import GitHubClient
 
@@ -54,6 +56,17 @@ def annotation(case, **overrides):
     return AnnotationRequest(**values)
 
 
+def builtin_manifest(path, repo):
+    path.write_text(json.dumps({
+        "name": "test-builtin",
+        "repository_head_sha": git(repo, "rev-parse", "HEAD"),
+        "known_irrelevant_files": ["helper.py"],
+        "cases": [{"name": "R02_app", "requirement_id": "R02", "source_commit": "abc",
+                   "query": "找到应用功能的核心实现文件", "expected_files": ["app.py"]}],
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def test_import_is_pending_idempotent_and_preserves_labels(dataset):
     service, case, task, _ = dataset
     assert case["state"] == "pending"
@@ -71,6 +84,24 @@ def test_import_skips_existing_before_limit(dataset):
     with patch.object(service.store, "list_tasks", return_value=[task, another]):
         result = service.import_history(DatasetImportRequest(merged_only=False, limit=1))
     assert len(result["created"]) == 1
+
+
+def test_builtin_dataset_imports_confirmed_test_cases_and_is_idempotent(dataset, tmp_path):
+    service, _, _, repo = dataset
+    service.builtin_dataset_path = builtin_manifest(tmp_path / "builtin.json", repo)
+
+    result = service.import_builtin(BuiltinDatasetImportRequest(repository_id="repo"))
+    assert len(result["created"]) == 1
+    imported = next(case for case in service.store.list_rag_cases()
+                    if case["source_task_id"].startswith("builtin:"))
+    assert imported["state"] == "confirmed"
+    assert imported["split"] == "test"
+    assert imported["base_sha"] == git(repo, "rev-parse", "HEAD")
+    assert {item["path"]: item["label"] for item in imported["candidates"]} == {
+        "app.py": "required", "helper.py": "irrelevant"
+    }
+    repeated = service.import_builtin(BuiltinDatasetImportRequest(repository_id="repo"))
+    assert not repeated["created"] and len(repeated["skipped"]) == 1
 
 
 def test_pending_never_evaluated(dataset):
@@ -195,11 +226,12 @@ def test_same_requirement_cannot_leak_across_splits(dataset):
         service.annotate(candidate["id"], annotation(candidate, split="test"))
 
 
-def test_api_annotation_and_errors(dataset):
+def test_api_annotation_and_errors(dataset, tmp_path):
     from fastapi.testclient import TestClient
     from apps.api import main
 
-    service, case, _, _ = dataset
+    service, case, _, repo = dataset
+    service.builtin_dataset_path = builtin_manifest(tmp_path / "api-builtin.json", repo)
     # 不启动 lifespan/Worker，防止 API 测试触发真实后台任务。
     with patch.object(main, "rag_service", return_value=service):
         client = TestClient(main.app)
@@ -210,6 +242,9 @@ def test_api_annotation_and_errors(dataset):
         assert client.put(f"/api/rag/dataset/cases/{case['id']}", json=payload).status_code == 409
         assert client.get("/api/rag/dataset/cases/missing/files").status_code == 404
         assert client.post("/api/rag/dataset/evaluate", json={"k": 0}).status_code == 422
+        imported = client.post("/api/rag/dataset/import-builtin", json={"repository_id": "repo"})
+        assert imported.status_code == 200
+        assert len(imported.json()["created"]) == 1
 
 
 def test_real_evaluator_contract_integration(dataset, tmp_path):

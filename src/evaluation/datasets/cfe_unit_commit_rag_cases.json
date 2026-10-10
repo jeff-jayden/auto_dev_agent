@@ -68,3 +68,4 @@
     {"name": "R49_regression_tests", "requirement_id": "R49", "source_commit": "3b025564e02efef7f417986ba18354e3222467d8", "query": "为路由、过滤、持久化、上传、订阅、播放列表和个人资料核心流程增加回归测试", "expected_files": ["src/App.test.js"]}
   ]
 }
+

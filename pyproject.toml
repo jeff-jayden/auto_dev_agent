@@ -25,6 +25,9 @@ py-modules = ["ui_validation"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+evaluation = ["datasets/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
