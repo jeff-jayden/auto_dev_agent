@@ -1,7 +1,8 @@
-"""Conservative token budgets shared by HTTP gateways and LangChain agents."""
+"""HTTP 与 LangChain 共用的保守上下文估算、软预算与窗口余量保护。"""
 
 import copy
 import json
+import math
 import os
 from dataclasses import dataclass
 
@@ -43,12 +44,22 @@ class ContextBudget:
     def input_limit(self):
         return min(self.max_input, self.window - self.output - self.safety)
 
+    @property
+    def hard_input_limit(self):
+        return self.window - self.output - self.safety
+
+    @property
+    def admission_limit(self):
+        # 字节估算偏保守：允许软预算小幅浮动，但绝不挤占输出与安全余量。
+        return min(math.ceil(self.max_input * 1.1), self.hard_input_limit)
+
 
 def fit_messages(messages, *, extra=None, budget=None):
-    """Drop optional evidence only; never silently cut requirements or code.
+    """Compact encoding and optional evidence; never cut requirements or code.
 
-    Keep tool-call/response pairs intact. If essential input cannot fit, stop
-    before making the request instead of sacrificing task constraints.
+    max_input is a soft target with a bounded 10% estimation margin. The
+    configured window minus output/safety reservations is always respected.
+    Keep tool-call/response pairs intact; fail only after fitting is exhausted.
     """
     budget = budget or ContextBudget.from_environment()
     fitted = copy.deepcopy(messages)
@@ -58,6 +69,20 @@ def fit_messages(messages, *, extra=None, budget=None):
         return token_upper_bound(fitted) + token_upper_bound(extra or {}) + 32 * len(fitted)
 
     before = size()
+    if before > budget.input_limit:
+        for message in fitted:
+            if message.get("role") != "user":
+                continue
+            try:
+                payload = json.loads(message["content"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            # 只压缩 JSON 编码空白，源码/需求字符串内的空白保持原样。
+            compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if token_upper_bound(compact) < token_upper_bound(message["content"]):
+                message["content"] = compact
+        if size() < before:
+            removed.append("json_encoding_whitespace")
     for message in fitted:
         if size() <= budget.input_limit:
             break
@@ -70,11 +95,11 @@ def fit_messages(messages, *, extra=None, budget=None):
         if not isinstance(payload, dict):
             continue
         context = payload.get("task_context", {})
-        for key in ("recent_change_evidence", "development_history"):
+        for key in ("recent_change_evidence", "development_history", "retrieved_history"):
             if context.get(key):
                 context[key] = []
                 removed.append("task_context." + key)
-                message["content"] = json.dumps(payload, ensure_ascii=False)
+                message["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 if size() <= budget.input_limit:
                     break
         # Preview evidence is redundant with read_file; keep requests, tool
@@ -82,15 +107,18 @@ def fit_messages(messages, *, extra=None, budget=None):
         if size() > budget.input_limit and payload.get("initial_context_preview"):
             payload["initial_context_preview"] = {}
             removed.append("initial_context_preview")
-            message["content"] = json.dumps(payload, ensure_ascii=False)
+            message["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     after = size()
-    if after > budget.input_limit:
+    if after > budget.admission_limit:
         raise ContextBudgetExceeded(
-            f"Context budget exceeded: conservative input estimate {after} > {budget.input_limit}; "
-            "critical requirements/current code were preserved. Narrow the task scope or increase the configured budget."
+            f"Context budget exceeded: 整理后保守输入估算 {after}，软预算 {budget.input_limit}，"
+            f"弹性准入上限 {budget.admission_limit}，配置窗口输入上限 {budget.hard_input_limit}。"
+            "已保留需求与当前源码，并预留输出空间；请检查上下文构成或模型窗口配置。"
         )
     return fitted, {"estimator": "utf8_byte_upper_bound", "input_before": before,
                     "input_estimate": after, "input_limit": budget.input_limit,
+                    "admission_limit": budget.admission_limit, "hard_input_limit": budget.hard_input_limit,
+                    "soft_budget_exceeded": after > budget.input_limit,
                     "output_reserved": budget.output, "removed_optional_evidence": removed}
 
 

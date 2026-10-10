@@ -99,6 +99,31 @@ def test_gateway_refuses_oversized_essential_input_before_http(gateway_type, mon
     assert "budget exceeded" in gateway.last_error
 
 
+def test_small_soft_budget_overflow_is_allowed_without_cutting_source():
+    messages = [{"role": "user", "content": "x" * 33000}]
+    fitted, report = fit_messages(messages, budget=ContextBudget())
+    assert fitted == messages
+    assert report["soft_budget_exceeded"]
+    assert report["input_estimate"] <= report["admission_limit"]
+    assert report["output_reserved"] == 8192
+
+
+def test_soft_margin_never_consumes_reserved_output_space():
+    budget = ContextBudget(window=1200, output=200, safety=100, max_input=1000)
+    with pytest.raises(ContextBudgetExceeded):
+        fit_messages([{"role": "user", "content": "x" * 900}], budget=budget)
+
+
+def test_json_compaction_preserves_code_and_requirement_strings():
+    payload = {"repository_context": {"main.py": "def f():\n    return 1\n"},
+               "task": {"requirement": "必须保留  原始空格"}}
+    messages = [{"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=50)}]
+    fitted, report = fit_messages(messages, budget=ContextBudget(max_input=600))
+    assert json.loads(fitted[0]["content"]) == payload
+    assert "json_encoding_whitespace" in report["removed_optional_evidence"]
+    assert fitted != messages
+
+
 def test_oversized_protected_constraints_are_not_silently_dropped(monkeypatch):
     task = task_with_history()
     monkeypatch.setenv("TASK_CONTEXT_MAX_TOKENS", "100")
