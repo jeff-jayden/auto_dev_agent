@@ -93,6 +93,8 @@ class RequirementPlanningAgent:
         system_prompt = (
             "你是资深软件架构师组成的 Plan Agent。只能根据已验证的仓库事实生成需求分析和技术方案，"
             "不得虚构文件。你可以自主决定是否调用只读规划工具补充仓库概览、候选文件和代码证据。"
+            "primary_files 仅为核心实现候选，dependency_files 为只读辅助上下文，不是修改清单。"
+            "逐个判断需求是否真的需要改动文件；不要因文件被召回、是入口或调用方就自动加入 affected_files。"
             "新增组件必须在 new_files 中申请具体路径和需求依据 reason，只允许 src/pages 或 src/components 下的 js/jsx/ts/tsx 文件，禁止目录通配符。必须同时规划创建、导出及已有入口的导入渲染。affected_files 可使用这些申请路径及工具或输入中出现的真实路径。用户可见行为变更必须把仓库中已有的"
             "对应测试文件加入 affected_files 和 test_plan。development_steps 必须提供 2 到 4 个可串行"
             "执行的步骤；每步 allowed_files 只能取自 affected_files，并写清 objective、"
@@ -226,12 +228,14 @@ class RequirementPlanningAgent:
                 app_files = [
                     path for path in known
                     if Path(path).name in {"App.js", "App.jsx", "App.tsx"}
+                    and (not context or path in context.primary_files)
                 ]
                 test_files = [
                     path for path in known
                     if Path(path).name in {"App.test.js", "App.test.jsx", "App.test.tsx"}
                 ]
-                style_files = [path for path in known if Path(path).name == "App.css"]
+                style_files = [path for path in known if Path(path).suffix.lower() in {".css", ".scss"}
+                               and (not context or any(Path(path).with_suffix("") == Path(core).with_suffix("") for core in context.primary_files))]
                 affected = list(dict.fromkeys([
                     *(context.primary_files if context else []),
                     *app_files,
@@ -379,11 +383,8 @@ class RequirementPlanningAgent:
         requirement: str,
     ) -> list[str]:
         """Include callers/entrypoints for requirements that change code wiring."""
-        combined = " ".join([
-            requirement,
-            plan.approach,
-            *plan.implementation_steps,
-        ]).lower()
+        # 通用方案中的“确认入口/调用链”不构成扩大可写范围的需求依据。
+        combined = requirement.lower()
         wiring_terms = (
             "导入", "引用", "调用", "使用方式", "接入", "注册", "路由", "挂载",
             "入口", "调用链", "恢复使用", "恢复原来", "连接",

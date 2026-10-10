@@ -1068,8 +1068,8 @@ async function render(task) {
   ].map(([label, value]) => `<div><small>${label}</small><b>${escapeHtml(value)}</b></div>`).join("");
   const contextPack = analysis.context_pack;
   $("#code-context").innerHTML = contextPack ? [
-    ["核心文件", contextPack.primary_files, `${contextPack.index_mode} · index v${contextPack.index_version}`],
-    ["依赖文件", contextPack.dependency_files, "只读调用链上下文"],
+    ["核心实现候选", contextPack.primary_files, `${contextPack.index_mode} · index v${contextPack.index_version} · 非修改清单`],
+    ["辅助上下文", contextPack.dependency_files, "调用方、样式与其他召回，仅供阅读参考"],
     ["相关测试", contextPack.test_files, `基线 ${contextPack.baseline_sha ? contextPack.baseline_sha.slice(0, 8) : "无"}`],
   ].map(([label, paths, detail]) => `<div class="context-group"><b>${label}</b><small>${escapeHtml(detail)}</small>${paths.map((path) => `<code title="${escapeHtml(path)}">${escapeHtml(path)}</code>`).join("") || "<small>未检索到</small>"}</div>`).join("") : "";
   $("#evidence").innerHTML = (task.technical_plan.evidence || []).map((item) => `<div class="evidence"><code>${escapeHtml(item.path)}:${item.line}</code><p>${escapeHtml(item.snippet)}</p><small>${escapeHtml(item.reason)}</small></div>`).join("") || "<p>当前未找到足够的行级证据，需要在开发阶段继续检索。</p>";

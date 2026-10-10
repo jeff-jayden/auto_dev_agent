@@ -93,7 +93,7 @@ class PlanningCreateAgentTests(unittest.TestCase):
         self.assertEqual(analysis.summary, "新增入口按钮")
         self.assertEqual(
             plan.affected_files,
-            ["src/App.js", "src/App.test.js", "src/index.js"],
+            ["src/App.js", "src/App.test.js"],
         )
         planner_calls = [item.tool for item in repository.tool_calls]
         self.assertIn("requirement_planning.list_planning_files", planner_calls)

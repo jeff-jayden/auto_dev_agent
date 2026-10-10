@@ -159,7 +159,8 @@ class RepositoryAnalysisTests(unittest.TestCase):
             changed,
         )
 
-        self.assertIn("src/App.js", context.primary_files)
+        self.assertNotIn("src/App.js", context.primary_files)
+        self.assertIn("src/App.js", context.dependency_files)
         self.assertIn("src/HistoryPanel.js", context.primary_files)
         self.assertNotIn("src/index.js", context.primary_files)
         self.assertIn("src/index.js", context.dependency_files)
@@ -312,7 +313,10 @@ class RepositoryAnalysisTests(unittest.TestCase):
         self.assertEqual(task.status, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
         self.assertEqual(task.repository_analysis.framework, "fastapi")
 
-        revised = orchestrator.revise(task.id, "reviewer", "必须支持 UTF-8 BOM")
+        with patch.object(orchestrator.repository_analyzer, "analyze", wraps=orchestrator.repository_analyzer.analyze) as analyze:
+            revised = orchestrator.revise(task.id, "reviewer", "必须支持 UTF-8 BOM")
+        analyze.assert_called_once()
+        self.assertIn("UTF-8 BOM", analyze.call_args.args[1])
         self.assertEqual(revised.status, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
         self.assertEqual(revised.metadata["plan_feedback"][0]["feedback"], "必须支持 UTF-8 BOM")
         self.assertTrue(any("UTF-8 BOM" in item for item in revised.analysis.acceptance_criteria))

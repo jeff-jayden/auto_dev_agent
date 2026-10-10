@@ -143,23 +143,29 @@ class RepositoryCodeIndex:
         for item in ranked_hits:
             reasons[item["path"]] = list(item["reasons"])
         ranked = [item["path"] for item in ranked_hits]
-        primary = [path for path in ranked if not self._is_test(path)][:6]
+        primary = self._primary_files(records, ranked, requirement)
         if not primary:
-            primary = [path for path in entrypoints if path in records][:3]
+            primary = [path for path in entrypoints if path in records and not self._is_test(path)][:1]
         if not primary:
-            primary = sorted(records)[:3]
+            primary = [path for path in sorted(records) if not self._is_test(path)][:1]
+        for path in primary:
+            reasons.setdefault(path, []).append("需求目标匹配的主要实现候选；不代表必须修改或已批准可写")
 
         dependencies: list[str] = []
         tests: list[str] = [path for path in ranked if self._is_test(path)][:6]
         for path in primary:
             record = records.get(path, {})
             for related in [*record.get("imports", []), *record.get("referenced_by", [])]:
-                if related in records and related not in primary and related not in dependencies:
-                    dependencies.append(related)
+                if related in records and related not in primary:
+                    if self._is_test(related):
+                        if related not in tests:
+                            tests.append(related)
+                    elif related not in dependencies:
+                        dependencies.append(related)
                     reasons.setdefault(related, []).append(f"与 {path} 存在依赖关系")
             stem = Path(path).stem.lower().replace("index", "")
             for candidate in records:
-                if self._is_test(candidate) and (stem in candidate.lower() or Path(path).name.lower() in records[candidate].get("search_text", "")):
+                if self._is_test(candidate) and ((stem and stem in candidate.lower()) or Path(path).name.lower() in records[candidate].get("search_text", "")):
                     if candidate not in tests:
                         tests.append(candidate)
                         reasons.setdefault(candidate, []).append(f"覆盖 {path} 的相关测试")
@@ -169,6 +175,15 @@ class RepositoryCodeIndex:
                     dependencies.append(style)
                     reasons.setdefault(style, []).append(f"{path} 的同名样式文件")
 
+        # 检索候选不等于核心实现。保留其余召回作为辅助上下文，避免缩小可读范围。
+        for path in entrypoints[:3]:
+            if path in records and path not in primary and not self._is_test(path) and path not in dependencies:
+                dependencies.append(path)
+                reasons.setdefault(path, []).append("只读入口上下文；不默认修改入口")
+        for path in ranked[:6]:
+            if path not in primary and not self._is_test(path) and path not in dependencies:
+                dependencies.append(path)
+                reasons.setdefault(path, []).append("检索召回的辅助上下文，不默认纳入修改范围")
         dependencies = [
             path for path in dependencies
             if not self._is_test(path) and path not in primary
@@ -209,6 +224,39 @@ class RepositoryCodeIndex:
             files=context_files,
             retrieval_strategy="embedding_chroma_rrf_v1" if self.vector_store else "hybrid_rag_v1",
         ), evidence
+
+    def _primary_files(self, records: dict, ranked: list[str], requirement: str) -> list[str]:
+        """用需求指向区分主要实现和辅助文件；无直接命中时只保留最高排名实现候选。
+
+        文件名指向优先于符号指向，避免父组件引用目标符号就一起被列为核心。
+        这是可解释的启发式分类，不把 RRF 排名分数当作置信度，也不决定可写范围。
+        """
+        normalized = requirement.lower().replace("\\", "/")
+        compact = re.sub(r"[^\w]", "", normalized)
+        candidates = [path for path in ranked if path in records and not self._is_test(path)]
+        explicit = [path for path in candidates if re.search(
+            r"(?<![\w./-])" + re.escape(path.lower()) + r"(?![\w./-])", normalized
+        ) or re.search(r"(?<![\w.-])" + re.escape(Path(path).name.lower()) + r"(?![\w.-])", normalized)]
+        styles = {".css", ".scss"}
+        generic = {"app", "index", "main", "server", "utils", "helpers", "common", "styles"}
+
+        def matches_target(path: str) -> bool:
+            stem = re.sub(r"[^\w]", "", Path(path).stem.lower())
+            target = re.sub(r"(?:page|panel|view|component|service|controller|handler)$", "", stem)
+            return any(len(value) >= 4 and value not in generic and value in compact for value in (stem, target))
+
+        named = [path for path in candidates if Path(path).suffix.lower() not in styles
+                 and matches_target(path)]
+        if explicit or named:
+            return list(dict.fromkeys([*explicit, *named]))[:6]
+        symbols = [path for path in candidates if Path(path).suffix.lower() not in styles and any(
+            len(symbol) >= 4 and symbol.lower() not in generic
+            and re.sub(r"[^\w]", "", symbol.lower()) in compact
+            for symbol in records[path].get("symbols", [])
+        )]
+        if symbols:
+            return symbols[:3]
+        return candidates[:1]
 
     def rank_files(
         self,

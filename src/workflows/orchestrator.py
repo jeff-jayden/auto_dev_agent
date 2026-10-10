@@ -2318,16 +2318,20 @@ class TaskOrchestrator:
         self._transition(task, TaskStatus.REQUIREMENT_ANALYSIS)
         task.metadata.setdefault("plan_feedback", []).append({"actor": actor, "feedback": feedback})
         enriched_requirement = f"{task.requirement}\n\n用户补充意见：{feedback}"
-        if task.repository_analysis is None:
-            repository = self.store.get_repository(task.repository_id or "")
-            if repository is None:
-                raise ValueError("Repository not found")
-            task.repository_analysis = self.repository_analyzer.analyze(Path(repository.local_path), enriched_requirement)
+        # 补充需求后重新分类上下文，不能继续使用旧需求保存的核心文件。
+        repository = self.store.get_repository(task.repository_id or "")
+        if repository is None:
+            raise ValueError("Repository not found")
+        task.repository_analysis = self.repository_analyzer.analyze(Path(repository.local_path), enriched_requirement)
         task.analysis, task.technical_plan = self.requirement_planning_agent.plan(
             task.title, enriched_requirement, task.repository_analysis,
             task.design_reference.context if task.design_reference else "",
         )
         self._transition(task, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
+        task.metadata["planning_head_sha"] = task.repository_analysis.head_sha
+        task.metadata["index_version"] = self.repository_analyzer.index_version
+        task.metadata["plan_hash"] = self._technical_plan_hash(task)
+        self.store.save_task(task)
         self._event(task, "plan_revised", f"已根据 {actor} 的意见重新生成方案", {"feedback": feedback})
         return task
 
