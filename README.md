@@ -218,6 +218,14 @@ python -m evaluation.retrieval --repository . --dataset tests/fixtures/rag_repos
 
 同一份工作区、同一标注集对比 **原哈希混合检索 → Embedding + Chroma 混合检索**，报告包含文件级 Recall@K、MRR、Hit@K、无关文件率、平均上下文文件数、查询耗时、命中代码块行号、模型标识、HEAD 和内容指纹。首次建库/预热耗时单独记录。示例提供本项目 8 个文件级标注，属于小样本 smoke benchmark；应补充真实需求、人工校正多文件标签和独立测试集，不能把此结果直接当作开发成功率。
 
+另有 `tests/fixtures/cfe_unit_commit_rag_cases.json`，包含 `cfe-unit` 最终完整代码快照上的 48 条历史需求文件召回标签。标签来自原始 R02–R49 功能提交并经过文件职责校正；R01、R50 仅修改文档，因此不纳入代码召回。运行前应确认目标仓库 HEAD 与数据集中的 `repository_head_sha` 一致：
+
+```powershell
+python -m evaluation.retrieval --repository E:\aiTraval\playground\cfe-unit `
+  --dataset tests/fixtures/cfe_unit_commit_rag_cases.json --k 3 `
+  --output runtime/evaluations/cfe-unit-rag-ab.json
+```
+
 启用 `embedding` 后页面“运行 Golden + RAG 评测”也使用真实仓库集，标明模型和数据来源；完整报告保存在 `runtime/evaluations`。可通过 `RAG_EVALUATION_REPOSITORY` / `RAG_EVALUATION_DATASET` 选择其他仓库及相应人工标注集。`legacy` 模式仍跑原 6 条模拟契约用例，页面会明确区分。真实评测首次建库较慢，当前同步入口适合本机小样本。
 
 ## 💾 状态、任务与恢复
