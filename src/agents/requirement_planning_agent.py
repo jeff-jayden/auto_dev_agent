@@ -21,6 +21,7 @@ from domain.models import (
     TechnicalPlan,
     ToolCallAudit,
 )
+from llm.context_budget import budget_middleware
 from tools.component_scope import validate_component_requests
 
 from llm.gateway import DisabledModelGateway, ModelGateway
@@ -119,6 +120,7 @@ class RequirementPlanningAgent:
             try:
                 model = self.model_gateway.build_langchain_model()
                 agent = create_agent(
+                    middleware=[budget_middleware()],
                     model=model,
                     tools=registry.tools,
                     system_prompt=system_prompt,

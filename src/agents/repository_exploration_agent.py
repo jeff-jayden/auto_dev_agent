@@ -15,7 +15,8 @@ from langchain.tools import tool
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
-from .task_context import build_task_context
+from .task_context import build_task_context, query_task_history
+from llm.context_budget import budget_middleware
 
 from domain.models import ToolCallAudit
 
@@ -74,7 +75,7 @@ class RepositoryExplorationAgent:
 
         context = dict(initial_context)
         registry = RepositoryExplorationToolRegistry(
-            toolkit, tracer=self.tracer, max_calls=self.max_steps,
+            toolkit, tracer=self.tracer, max_calls=self.max_steps, task=task,
         )
         if callable(getattr(self.model_gateway, "build_langchain_model", None)):
             try:
@@ -95,7 +96,7 @@ class RepositoryExplorationAgent:
                     success=False,
                 ))
                 registry = RepositoryExplorationToolRegistry(
-                    toolkit, tracer=self.tracer, max_calls=self.max_steps,
+                    toolkit, tracer=self.tracer, max_calls=self.max_steps, task=task,
                 )
 
         observations: list[dict] = []
@@ -110,6 +111,7 @@ class RepositoryExplorationAgent:
             "每轮只能选择一个工具，是否调用工具完全由你决定。优先使用已有上下文；"
             "只有存在明确的信息缺口时才搜索或读取，上下文充分时第一轮就可以 finish。"
             "不得请求写文件、执行测试、运行 shell、扩大 allowed_files 或发布代码。"
+            "修改旧行为前检查 task_summary；摘要被截断、历史轮次被省略或引用不明确时，使用 query_task_history 回查相关原始要求，不以摘要替代完整要求。"
             "可用工具由 payload.tools 提供；tool 必须是其中一个 name，arguments 必须严格符合该工具的 input_schema。"
             "信息足够时使用 tool=finish 且 arguments={}。所有动作必须说明 reason，输出严格 JSON。"
         )
@@ -220,6 +222,7 @@ class RepositoryExplorationAgent:
             "仅在存在明确证据缺口时调用工具；优先搜索定位，再读取必要片段，避免重复调用。"
             f"最多执行 {self.max_steps} 次工具调用。每次调用必须在 reason 参数中写明目的。"
             "禁止写文件、执行测试、运行 shell、扩大可修改文件或发布代码。"
+            "修改旧行为前检查 task_summary；摘要被截断、历史轮次被省略或引用不明确时，使用 query_task_history 回查相关原始要求。"
             "信息充分后直接返回简短中文总结，不要输出代码修改方案。"
         )
         payload = {
@@ -241,6 +244,7 @@ class RepositoryExplorationAgent:
             model=model,
             tools=registry.tools,
             system_prompt=system_prompt,
+            middleware=[budget_middleware()],
         )
         scope = self.tracer.span(
             "agent.langchain_create_agent",
@@ -339,10 +343,21 @@ class GitHistoryInput(BaseModel):
     reason: str = Field(default="", max_length=500, description="为什么当前需要查看历史")
 
 
+class HistoryQueryInput(BaseModel):
+    query: str = Field(default="", max_length=300)
+    round_number: int | None = Field(default=None, ge=1)
+    file: str = Field(default="", max_length=500)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=2, ge=1, le=4)
+    text_offset: int = Field(default=0, ge=0)
+    field: str = Field(default="feedback", pattern="^(feedback|agent_message|diff)$")
+    reason: str = Field(default="", max_length=500)
+
+
 class RepositoryExplorationToolRegistry:
     """LangChain tool registry backed by the project's policy-aware toolkit."""
 
-    def __init__(self, toolkit, *, tracer=None, max_calls: int = 8):
+    def __init__(self, toolkit, *, tracer=None, max_calls: int = 8, task=None):
         """注册受项目策略约束的 LangChain 只读工具。
 
         Args:
@@ -385,6 +400,20 @@ class RepositoryExplorationToolRegistry:
             """查看指定文件最近的 Git 提交历史；需要理解代码演进原因时使用。"""
             return self._execute("git_history", {"path": path}, reason, lambda: toolkit.git_history(path))
 
+        @tool("query_task_history", args_schema=HistoryQueryInput)
+        def history_tool(query: str = "", round_number: int | None = None, file: str = "",
+                         offset: int = 0, limit: int = 2, text_offset: int = 0,
+                         field: str = "feedback", reason: str = ""):
+            """按关键词、轮次或文件查询本任务完整历史；分页读取原始需求、执行结果或 Diff。"""
+            arguments = dict(query=query, round_number=round_number, file=file, offset=offset,
+                             limit=limit, text_offset=text_offset, field=field)
+            def retrieve():
+                result = query_task_history(task, **arguments)
+                task.metadata.setdefault("retrieved_history", []).append(result)
+                task.metadata["retrieved_history"] = task.metadata["retrieved_history"][-4:]
+                return result
+            return self._execute("query_task_history", arguments, reason, retrieve)
+
         tools = [
             search_text_tool,
             search_symbol_tool,
@@ -392,6 +421,8 @@ class RepositoryExplorationToolRegistry:
             read_file_tool,
             git_history_tool,
         ]
+        if task is not None:
+            tools.append(history_tool)
         self._tools: dict[str, BaseTool] = {item.name: item for item in tools}
 
     @property

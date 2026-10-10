@@ -367,6 +367,13 @@ class CodeReviewAgent:
             ReviewerModelOutput,
         )
         if not isinstance(response, ReviewerModelOutput):
+            error = getattr(self.model_gateway, "last_error", "")
+            if isinstance(error, str) and "budget" in error.lower():
+                return [ReviewFinding(
+                    severity="high", category="context", blocking=True,
+                    message="Review context exceeded its budget; review was not completed.",
+                    suggestion="Narrow the review scope or increase the configured context budget before publishing.",
+                )], []
             return [], []
         valid_paths = set(changed_lines)
         result: list[ReviewFinding] = []

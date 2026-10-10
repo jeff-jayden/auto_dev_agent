@@ -13,6 +13,8 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
+from .context_budget import ContextBudget, ContextBudgetExceeded, fit_messages
+
 
 class ModelGateway(Protocol):
     @property
@@ -58,6 +60,7 @@ class OpenAICompatibleGateway:
         self.last_error = ""
         self.last_response_content = ""
         self.last_usage: dict[str, int] = {}
+        self.last_context_budget: dict = {}
 
     def generate_structured(self, system_prompt: str, user_prompt: str, output_model: type[BaseModel]) -> BaseModel | None:
         messages = [
@@ -65,6 +68,13 @@ class OpenAICompatibleGateway:
                 {"role": "user", "content": user_prompt},
         ]
         for attempt in range(3):
+            try:
+                messages, self.last_context_budget = fit_messages(
+                    messages, extra={"schema": output_model.model_json_schema()},
+                )
+            except ContextBudgetExceeded as error:
+                self.last_error = str(error)
+                return None
             content = ""
             payload = {
                 "model": self.model,
@@ -72,6 +82,7 @@ class OpenAICompatibleGateway:
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
                 **self.extra_payload,
+                "max_tokens": min(int(self.extra_payload.get("max_tokens", ContextBudget.from_environment().output)), ContextBudget.from_environment().output),
             }
             request = urllib.request.Request(
                 f"{self.base_url}/chat/completions",
@@ -161,13 +172,21 @@ class OllamaGateway(OpenAICompatibleGateway):
             {"role": "user", "content": user_prompt},
         ]
         for attempt in range(3):
+            try:
+                messages, self.last_context_budget = fit_messages(
+                    messages, extra={"schema": output_model.model_json_schema()},
+                )
+            except ContextBudgetExceeded as error:
+                self.last_error = str(error)
+                return None
             payload = {
                 "model": self.model,
                 "messages": messages,
                 "stream": False,
                 "think": False,
                 "format": output_model.model_json_schema(),
-                "options": {"temperature": 0.1, "num_predict": 2048},
+                "options": {"temperature": 0.1, "num_predict": ContextBudget.from_environment().output,
+                            "num_ctx": ContextBudget.from_environment().window},
             }
             request = urllib.request.Request(
                 f"{self.base_url}/api/chat",

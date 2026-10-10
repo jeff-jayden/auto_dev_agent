@@ -195,6 +195,8 @@ class SQLiteTaskStore:
         Returns:
             原任务对象，便于调用方继续编排。
         """
+        from agents.task_context import refresh_task_summary
+        refresh_task_summary(task)
         serialized = task.model_dump_json()
         with self._connect() as connection:
             connection.execute(

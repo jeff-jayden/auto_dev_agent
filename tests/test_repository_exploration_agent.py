@@ -266,7 +266,7 @@ class DeveloperContextToolTests(unittest.TestCase):
 
         with patch(
             "agents.repository_exploration_agent.create_agent",
-            side_effect=lambda *, model, tools, system_prompt: FakeCompiledAgent(tools),
+            side_effect=lambda *, model, tools, system_prompt, middleware: FakeCompiledAgent(tools),
         ) as create:
             context = RepositoryExplorationAgent(CreateAgentGateway(), max_steps=4).explore(
                 task=task,

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agents.code_development_agent import CodeDevelopmentAgent
-from agents.task_context import build_task_context
+from agents.task_context import build_task_context, query_task_history
 from domain.models import Task
 from infrastructure.store import SQLiteTaskStore
 
@@ -52,9 +52,10 @@ def test_rollback_failure_and_old_requests_are_not_lost():
         {"feedback": "恢复布局", "status": "failed", "test_exit_code": 1},
     ] + [{"feedback": f"保留功能{i}", "status": "running"} for i in range(12)]
     context = build_task_context(task)
-    assert context["feedback_history"][0]["rolled_back"] is True
-    assert context["feedback_history"][1]["operation"] == "rollback"
-    assert context["feedback_history"][2]["status"] == "failed"
-    assert len(context["feedback_history"]) == 15
-    assert len(context["recent_change_evidence"]) == 4
+    assert len(context["feedback_history"]) == 3
+    assert context["task_summary"]["user_requirements"][0]["status"] == "withdrawn_or_rollback"
+    assert query_task_history(task, round_number=1)["records"][0]["rolled_back"] is True
+    assert query_task_history(task, round_number=2)["records"][0]["operation"] == "rollback"
+    assert query_task_history(task, round_number=3)["records"][0]["status"] == "failed"
+    assert task.metadata["task_summary"]["total_rounds"] == 15
     assert build_task_context(Task(id="context-test", status="developing", title="旧任务", requirement="原需求"))["feedback_history"] == []
