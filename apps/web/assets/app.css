@@ -1,5 +1,6 @@
 :root{--ink:#1f2328;--muted:#667085;--bg:#f3f4f6;--panel:#fff;--line:#d8dee6;--green:#2563eb;--green-soft:#eff6ff;--lime:#3b82f6;--red:#b42318;--success:#1f883d;--success-soft:#ecfdf3;--sidebar:#17191c;--sidebar-muted:#9ca3af}
 *{box-sizing:border-box}
+.task-history-row{position:relative;flex-shrink:0}.task-history-row .task-list-item{padding-right:51px}.task-delete-button{position:absolute;right:6px;bottom:7px;background:transparent;border:0;color:var(--muted);padding:5px;font-size:12px;border-radius:4px}.task-delete-button:hover{background:#fee4e2;color:var(--red)}.task-delete-button:disabled{opacity:.5;cursor:wait}
 html,body{height:100%;margin:0}
 body{overflow:hidden;color:var(--ink);background:var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;font-size:14px}
 .development-progress-panel{min-height:max-content!important;flex-shrink:0}

@@ -8,10 +8,53 @@ from fastapi.testclient import TestClient
 
 from apps.api import main
 from tests.support import build_orchestrator
-from domain.models import ExecutionJob, TaskStatus
+from domain.models import ExecutionJob, Task, TaskStatus
 
 
 class ApiTests(unittest.TestCase):
+    def test_delete_incomplete_history_task_preserves_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = build_orchestrator(Path(directory) / "runtime")
+            task = Task(id="incomplete", title="分析中断", requirement="未生成方案", status=TaskStatus.REQUIREMENT_ANALYSIS)
+            isolated.store.save_task(task)
+            with patch.object(main, "orchestrator", isolated), \
+                    patch.object(main.execution_worker, "start"), \
+                    patch.object(main.execution_worker, "stop"):
+                with TestClient(main.app) as client:
+                    self.assertEqual(client.delete("/api/tasks/incomplete").status_code, 200)
+                    self.assertEqual(client.get("/api/tasks/incomplete").status_code, 404)
+                    self.assertNotIn("incomplete", [item["id"] for item in client.get("/api/tasks").json()])
+                    self.assertEqual(client.delete("/api/tasks/incomplete").status_code, 404)
+                    self.assertEqual(client.delete("/api/tasks/missing").status_code, 404)
+            # 旧执行快照再次保存不能令已删除任务重新出现。
+            isolated.store.save_task(task)
+            self.assertIsNone(isolated.store.get_task(task.id))
+            with isolated.store._connect() as connection:
+                self.assertIsNotNone(connection.execute("SELECT id FROM tasks WHERE id=?", (task.id,)).fetchone())
+            with self.assertRaisesRegex(ValueError, "已删除"):
+                isolated.store.enqueue_job(ExecutionJob(id="late", task_id=task.id, action="resume"))
+
+    def test_delete_rejects_active_jobs_and_allows_finished_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = build_orchestrator(Path(directory) / "runtime")
+            with patch.object(main, "orchestrator", isolated), \
+                    patch.object(main.execution_worker, "start"), \
+                    patch.object(main.execution_worker, "stop"):
+                with TestClient(main.app) as client:
+                    for status in ("queued", "running", "pause_requested"):
+                        task = Task(id=status, title=status, requirement="任务", status=TaskStatus.REQUIREMENT_ANALYSIS)
+                        isolated.store.save_task(task)
+                        job = ExecutionJob(id=status, task_id=task.id, action="resume", status=status)
+                        isolated.store.enqueue_job(job)
+                        response = client.delete(f"/api/tasks/{task.id}")
+                        self.assertEqual(response.status_code, 409)
+                        self.assertIn("先取消执行", response.json()["detail"])
+                        self.assertIsNotNone(isolated.store.get_task(task.id))
+                        job.status = "cancelled"
+                        isolated.store.save_job(job)
+                        self.assertEqual(client.delete(f"/api/tasks/{task.id}").status_code, 200)
+                        self.assertEqual(isolated.store.get_job(job.id).status, "cancelled")
+
     def test_api_flow(self):
         with tempfile.TemporaryDirectory() as directory:
             isolated = build_orchestrator(Path(directory) / "runtime")

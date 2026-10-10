@@ -71,6 +71,10 @@ class SQLiteTaskStore:
                     payload TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS deleted_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS repositories (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -274,14 +278,36 @@ class SQLiteTaskStore:
             找到的任务；不存在时返回 ``None``。
         """
         with self._connect() as connection:
-            row = connection.execute("SELECT data FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            row = connection.execute("SELECT data FROM tasks WHERE id = ? AND id NOT IN (SELECT task_id FROM deleted_tasks)", (task_id,)).fetchone()
         return Task.model_validate_json(row["data"]) if row else None
 
     def list_tasks(self) -> list[Task]:
         """按创建时间倒序返回所有任务，最新任务排在最前。"""
         with self._connect() as connection:
-            rows = connection.execute("SELECT data FROM tasks ORDER BY created_at DESC").fetchall()
+            rows = connection.execute("SELECT data FROM tasks WHERE id NOT IN (SELECT task_id FROM deleted_tasks) ORDER BY created_at DESC").fetchall()
         return [Task.model_validate_json(row["data"]) for row in rows]
+
+    def delete_task(self, task_id: str) -> bool:
+        """软删除历史任务，保留代码、PR 和审计证据；活动 Job 与删除互斥。"""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute(
+                "SELECT id FROM tasks WHERE id=? AND id NOT IN (SELECT task_id FROM deleted_tasks)",
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                return False
+            active = connection.execute(
+                "SELECT id FROM execution_jobs WHERE task_id=? AND status IN ('queued','running','pause_requested') LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if active:
+                raise ValueError("任务正在排队或执行中，请先取消执行，等待结束后再删除")
+            connection.execute(
+                "INSERT INTO deleted_tasks(task_id,deleted_at) VALUES(?,?)",
+                (task_id, datetime.now(UTC).isoformat()),
+            )
+        return True
 
     def add_event(self, event: TaskEvent) -> TaskEvent:
         """追加一条不可变的任务事件。
@@ -345,6 +371,8 @@ class SQLiteTaskStore:
         """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT 1 FROM deleted_tasks WHERE task_id=?", (job.task_id,)).fetchone():
+                raise ValueError("任务已删除，不能继续执行")
             existing = connection.execute(
                 """
                 SELECT data FROM execution_jobs
