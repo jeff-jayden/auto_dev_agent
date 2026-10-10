@@ -15,6 +15,7 @@ from domain.models import (
     RepositoryAnalysis,
     ReplacementDevelopmentProposal,
     RequirementAnalysis,
+    ReviewerModelOutput,
     Task,
     TaskStatus,
     TechnicalPlan,
@@ -343,6 +344,8 @@ class RepositoryAnalysisTests(unittest.TestCase):
             enabled = True
 
             def generate_structured(self, system_prompt, user_prompt, output_model):
+                if output_model is ReviewerModelOutput:
+                    return ReviewerModelOutput(summary="测试桩审查通过", findings=[])
                 if output_model.__name__ not in {"DevelopmentProposal", "ReplacementDevelopmentProposal"}:
                     return None
                 return DevelopmentProposal(
@@ -414,6 +417,8 @@ class RepositoryAnalysisTests(unittest.TestCase):
                 self.development_calls = 0
 
             def generate_structured(self, system_prompt, user_prompt, output_model):
+                if output_model is ReviewerModelOutput:
+                    return ReviewerModelOutput(summary="测试桩审查通过", findings=[])
                 if output_model.__name__ not in {"DevelopmentProposal", "ReplacementDevelopmentProposal"}:
                     return None
                 self.development_calls += 1
@@ -615,6 +620,8 @@ class RepositoryAnalysisTests(unittest.TestCase):
             enabled = True
 
             def generate_structured(self, system_prompt, user_prompt, output_model):
+                if output_model is ReviewerModelOutput:
+                    return ReviewerModelOutput(summary="测试桩审查通过", findings=[])
                 if output_model.__name__ not in {"DevelopmentProposal", "ReplacementDevelopmentProposal"}:
                     return None
                 return DevelopmentProposal(
