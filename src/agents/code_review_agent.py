@@ -13,6 +13,8 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from .task_context import build_task_context
+
 from domain.models import ReviewFinding, ReviewerModelOutput, ReviewRound, Task
 from llm import ModelGateway
 
@@ -328,6 +330,7 @@ class CodeReviewAgent:
             "输出严格 JSON。",
             json.dumps({
                 "requirement": task.requirement,
+                "task_context": build_task_context(task),
                 "figma_design": (
                     {
                         "node_id": task.design_reference.node_id,

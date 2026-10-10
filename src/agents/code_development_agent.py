@@ -15,6 +15,8 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from .task_context import build_task_context
+
 from domain.models import (
     DevelopmentAttempt,
     DevelopmentProposal,
@@ -686,6 +688,7 @@ class CodeDevelopmentAgent:
         }
         payload = {
             "task": {"title": task.title, "requirement": task.requirement},
+            "task_context": build_task_context(task),
             "figma_design": (
                 {
                     "node_id": task.design_reference.node_id,

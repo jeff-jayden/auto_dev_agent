@@ -15,6 +15,8 @@ from langchain.tools import tool
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
+from .task_context import build_task_context
+
 from domain.models import ToolCallAudit
 
 
@@ -115,6 +117,7 @@ class RepositoryExplorationAgent:
         for step in range(1, self.max_steps + 1):
             payload = {
                 "goal": {"title": task.title, "requirement": task.requirement},
+                "task_context": build_task_context(task),
                 "technical_plan": {
                     "approach": task.technical_plan.approach,
                     "allowed_files": write_scope,
@@ -221,6 +224,7 @@ class RepositoryExplorationAgent:
         )
         payload = {
             "goal": {"title": task.title, "requirement": task.requirement},
+            "task_context": build_task_context(task),
             "technical_plan": {
                 "approach": task.technical_plan.approach,
                 "allowed_files": write_scope,
