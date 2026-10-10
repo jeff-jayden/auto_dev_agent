@@ -21,6 +21,8 @@ from domain.models import (
     TechnicalPlan,
     ToolCallAudit,
 )
+from tools.component_scope import validate_component_requests
+
 from llm.gateway import DisabledModelGateway, ModelGateway
 
 
@@ -58,7 +60,15 @@ class RequirementPlanningAgent:
                     item.path for item in repository.context_pack.files
                 } if repository.context_pack else set()
                 known = set(repository.important_files) | {item.path for item in repository.evidence} | context_paths
-                if all(path in known for path in response.plan.affected_files):
+                try:
+                    new_paths = validate_component_requests(response.plan.new_files)
+                    if any(path in known for path in new_paths):
+                        raise ValueError("New component already exists in repository evidence")
+                except ValueError:
+                    new_paths = []
+                    response = None
+                if response is not None and all(path in known or path in new_paths for path in response.plan.affected_files):
+                    response.plan.affected_files = list(dict.fromkeys([*response.plan.affected_files, *new_paths]))
                     if repository.framework == "react":
                         test_files = [
                             path for path in repository.important_files
@@ -82,7 +92,7 @@ class RequirementPlanningAgent:
         system_prompt = (
             "你是资深软件架构师组成的 Plan Agent。只能根据已验证的仓库事实生成需求分析和技术方案，"
             "不得虚构文件。你可以自主决定是否调用只读规划工具补充仓库概览、候选文件和代码证据。"
-            "affected_files 只能使用工具或输入中出现的真实路径。用户可见行为变更必须把仓库中已有的"
+            "新增组件必须在 new_files 中申请具体路径和需求依据 reason，只允许 src/pages 或 src/components 下的 js/jsx/ts/tsx 文件，禁止目录通配符。必须同时规划创建、导出及已有入口的导入渲染。affected_files 可使用这些申请路径及工具或输入中出现的真实路径。用户可见行为变更必须把仓库中已有的"
             "对应测试文件加入 affected_files 和 test_plan。development_steps 必须提供 2 到 4 个可串行"
             "执行的步骤；每步 allowed_files 只能取自 affected_files，并写清 objective、"
             "acceptance_checks 和前置 depends_on。信息充分时直接返回最终结构化方案。"

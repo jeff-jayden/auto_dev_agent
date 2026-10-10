@@ -57,7 +57,13 @@ class DevelopmentStep(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
 
 
+class NewComponentRequest(BaseModel):
+    path: str
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class TechnicalPlan(BaseModel):
+    new_files: list[NewComponentRequest] = Field(default_factory=list, max_length=8)
     approach: str
     affected_files: list[str]
     implementation_steps: list[str]
@@ -160,6 +166,7 @@ class TextReplacement(BaseModel):
 
 
 class DevelopmentProposal(BaseModel):
+    new_files: list[NewComponentRequest] = Field(default_factory=list, max_length=8)
     summary: str = "按批准方案实现需求"
     changes: list[PatchChange] = Field(default_factory=list)
     replacements: list[TextReplacement] = Field(default_factory=list)
@@ -169,6 +176,7 @@ class DevelopmentProposal(BaseModel):
 
 
 class ReplacementDevelopmentProposal(BaseModel):
+    new_files: list[NewComponentRequest] = Field(default_factory=list, max_length=8)
     summary: str = "按批准方案实现需求"
     replacements: list[TextReplacement] = Field(min_length=1, max_length=8)
     preserved_behaviors: list[str] = Field(min_length=1, max_length=12)

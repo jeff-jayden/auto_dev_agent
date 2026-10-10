@@ -26,6 +26,7 @@ from domain.models import (
     ToolCallAudit,
 )
 from llm import ModelGateway
+from tools.component_scope import approve_component_requests
 from tools import DeveloperToolkit, PatchRejected, ToolPolicy
 
 from .repository_exploration_agent import RepositoryExplorationAgent
@@ -310,6 +311,24 @@ class CodeDevelopmentAgent:
                         error=f"Model did not return a valid structured patch proposal{suffix}",
                     ),
                 }
+            try:
+                requested_paths = approve_component_requests(
+                    task, proposal.new_files, toolkit.repository, "developer",
+                )
+                for path in requested_paths:
+                    if path not in write_scope:
+                        write_scope.append(path)
+                    policy.allowed_paths.add(path)
+                    if step_context and path not in step_context["allowed_files"]:
+                        step_context["allowed_files"].append(path)
+                    if step_context:
+                        for step in task.technical_plan.development_steps:
+                            if step.id == step_context.get("id", step_context.get("step_id")) and path not in step.allowed_files:
+                                step.allowed_files.append(path)
+            except ValueError as error:
+                return {"route": "done", "outcome": DevelopmentRunOutcome(
+                    kind="failed", attempts=attempts, error=str(error),
+                )}
             paths = [change.path for change in proposal.changes] + [
                 replacement.path for replacement in proposal.replacements
             ]
@@ -604,6 +623,7 @@ class CodeDevelopmentAgent:
             "但不代表允许修改；是否可写只以 allowed_files 为准。"
             "technical_plan、affected_files、repository_context 都是元数据，不是文件；"
             "绝对不要返回 technical_plan.json，也不要修改未列出的路径。"
+            "需要新增组件时在 new_files 提交具体 path 和 reason，由系统校验后授权；只允许 src/pages/ 或 src/components/ 下的 js/jsx/ts/tsx 文件，不得申请目录或已有范围外的现存文件。申请的新文件可以在同一提案中以空 search 创建，并补全导出、已有入口导入及渲染。不要因缺少组件就一律内联到 App。"
             "优先使用 replacements：search 必须从 repository_context 原样完整复制，"
             "并且在目标文件中只出现一次；replace 是替换后的完整文本。"
             "如果 replace 包含一个完整的函数、CSS 规则或其他花括号代码块，search 也必须包含原块的完整起止花括号；"
@@ -776,6 +796,7 @@ class CodeDevelopmentAgent:
             return None
         return DevelopmentProposal(
             summary=response.summary,
+            new_files=response.new_files,
             replacements=response.replacements,
             preserved_behaviors=response.preserved_behaviors,
             intentional_removals=response.intentional_removals,

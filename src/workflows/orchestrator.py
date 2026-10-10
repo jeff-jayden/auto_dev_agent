@@ -1093,6 +1093,9 @@ class TaskOrchestrator:
         ):
             raise ValueError("User feedback repair requires a configured Developer Agent")
 
+        if not rollback_requested:
+            from tools.component_scope import approve_feedback_components
+            approve_feedback_components(task, normalized_feedback, actor)
         before_snapshot = self._workspace_snapshot(task)
         snapshot_id = self._save_feedback_snapshot(task, before_snapshot)
         feedback_round = {
