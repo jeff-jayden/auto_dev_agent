@@ -183,6 +183,75 @@ def test_review_budget_failure_is_blocking():
     assert findings[0].category == "context"
 
 
+def test_review_evidence_deduplicates_only_verified_snapshot_lines():
+    from agents.code_review_agent import CodeReviewAgent
+    source = "const value = '" + "new" * 100 + "';"
+    diff = "--- a/main.js\n+++ b/main.js\n@@ -1 +1 @@\n-const value = 'old';\n+" + source
+    candidate = {"id": "c1", "file": "main.js", "operation": "replace",
+                 "baseline_start_line": 1, "baseline_end_line": 1,
+                 "current_start_line": 1, "current_end_line": 1,
+                 "original_text": "const value = 'old';\n", "current_text": source + "\n"}
+    compact, candidates = CodeReviewAgent._review_evidence(diff, {"main.js": source + "\n"}, [candidate])
+    assert "-const value = 'old';" in compact
+    assert "current_files" in compact and "1-1" in compact
+    assert source not in compact
+    assert candidates[0]["id"] == "c1"
+    assert "original_text_reference" in candidates[0]
+    assert "current_text_reference" in candidates[0]
+    unmatched, _ = CodeReviewAgent._review_evidence(diff, {"main.js": "different"}, [])
+    assert source in unmatched  # 快照不一致时不得去掉证据。
+
+
+def test_baseline_candidates_ignore_crlf_but_keep_actual_deletions(tmp_path):
+    import subprocess
+    from sandbox.workspace import WorkspaceManager
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout.strip()
+    git("init")
+    git("config", "core.autocrlf", "false")
+    original = "keep header\nkeep behavior\nkeep footer\n"
+    target = tmp_path / "main.txt"
+    target.write_bytes(original.encode())
+    git("add", "main.txt")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.local", "commit", "-m", "baseline")
+    baseline = git("rev-parse", "HEAD")
+    manager = WorkspaceManager(tmp_path / "runtime")
+    target.write_bytes(original.replace("\n", "\r\n").encode())
+    assert manager.baseline_deletion_candidates(tmp_path, baseline, ["main.txt"]) == []
+    target.write_bytes(b"keep header\r\nchanged behavior\r\nkeep footer\r\n")
+    candidates = manager.baseline_deletion_candidates(tmp_path, baseline, ["main.txt"])
+    assert len(candidates) == 1
+    assert candidates[0]["original_text"] == "keep behavior\n"
+    assert candidates[0]["baseline_start_line"] == 2
+    manager.restore_baseline_deletions(tmp_path, baseline, ["main.txt"], [candidates[0]["id"]])
+    assert target.read_text() == original
+
+
+def test_review_service_failure_does_not_trigger_code_repair():
+    from agents.code_review_agent import CodeReviewAgent
+    from domain.models import ReviewRound, ReviewFinding
+    task = task_with_history()
+    review = ReviewRound(round=1, decision="changes_requested", summary="service failed", findings=[
+        ReviewFinding(severity="high", category="context", message="budget exceeded", blocking=True)
+    ])
+    repair = Mock()
+    CodeReviewAgent(Mock()).run_loop(task, lambda state: {"route": "repair", "review": review}, repair)
+    repair.assert_not_called()
+    assert "审查未完成" in task.error
+
+
+def test_invalid_review_response_is_not_silently_approved():
+    from agents.code_review_agent import CodeReviewAgent
+    from domain.models import ExecutionResult
+    task = task_with_history()
+    task.result = ExecutionResult(success=True, command=["test"], exit_code=0, output="passed",
+                                  diff="", mr_title="page", mr_description="page")
+    gateway = Mock(enabled=True, last_error="invalid JSON")
+    gateway.generate_structured.return_value = None
+    findings, _ = CodeReviewAgent(gateway)._model_findings(task, {}, [])
+    assert findings[0].blocking and findings[0].category == "model"
+
+
 def test_large_history_is_bounded_but_original_round_remains_queryable():
     task = task_with_history()
     task.metadata["user_feedback_rounds"] = [

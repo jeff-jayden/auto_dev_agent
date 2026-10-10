@@ -99,7 +99,14 @@ class WorkspaceManager:
                 continue
             original_lines = original.splitlines(keepends=True)
             current_lines = current.splitlines(keepends=True)
-            matcher = difflib.SequenceMatcher(None, original_lines, current_lines, autojunk=False)
+            # Git 基线常为 LF，Windows 工作区常为 CRLF。只比较行内容，
+            # 不把纯换行格式变化判成整文件误删；恢复片段和 ID 仍使用原始文本。
+            matcher = difflib.SequenceMatcher(
+                None,
+                [line.rstrip("\r\n") for line in original_lines],
+                [line.rstrip("\r\n") for line in current_lines],
+                autojunk=False,
+            )
             for index, (operation, old_start, old_end, new_start, new_end) in enumerate(matcher.get_opcodes(), 1):
                 if operation not in {"delete", "replace"} or old_start == old_end:
                     continue

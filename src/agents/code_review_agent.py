@@ -117,8 +117,20 @@ class CodeReviewAgent:
         repair_node: Callable[[ReviewLoopState], dict],
     ) -> Task:
         """Run the bounded review/repair subgraph for this reviewer."""
+        def reviewed(state):
+            result = review_node(state)
+            review = result.get("review")
+            if result.get("route") == "repair" and review and any(
+                finding.blocking and finding.category in {"context", "model"}
+                for finding in review.findings
+            ):
+                # 平台/模型故障不是代码缺陷，禁止交给 Developer 制造无关修改。
+                task.error = "审查未完成：上下文或模型调用失败，请修复审查服务后重新审查"
+                result["route"] = "done"
+            return result
+
         graph = StateGraph(ReviewLoopState)
-        graph.add_node("review", review_node)
+        graph.add_node("review", reviewed)
         graph.add_node("repair", repair_node)
         graph.add_edge(START, "review")
         graph.add_conditional_edges(
@@ -314,6 +326,9 @@ class CodeReviewAgent:
                     current_files[relative] = target.read_text(
                         encoding="utf-8", errors="replace"
                     )[:24_000]
+        review_diff, review_candidates = self._review_evidence(
+            task.result.diff, current_files, baseline_deletion_candidates,
+        )
         response = self.model_gateway.generate_structured(
             "你是独立 Code Reviewer。只审查给定需求、方案、测试证据和 Diff。"
             "只报告能从 Diff 直接定位的问题；不确定内容不得标为 high/critical。"
@@ -326,6 +341,9 @@ class CodeReviewAgent:
             "系统会从 Git 基线确定性恢复该片段，禁止在 suggestion 中要求 Developer 凭记忆重写原内容。"
             "若删除已由需求、技术方案或有效 intentional_removals 明确授权，不得选择对应候选。"
             "current_files 是审查时的真实工作区快照；判断行为是否存在时必须同时检查它。"
+            "Diff 中的新增内容引用标记表示对应源码已在 current_files 中提供，必须读取该文件指定行范围，"
+            "不是省略了审查内容。候选片段的 original_text_reference/current_text_reference 指向"
+            "Diff 删除行或 current_files 中完全相同的原文，需结合行号核对，不能将引用标记当代码。"
             "文件未出现在 Diff 只表示本任务没有修改它，不能据此推断其中的功能或文本不存在。"
             "输出严格 JSON。",
             json.dumps({
@@ -346,21 +364,10 @@ class CodeReviewAgent:
                 "acceptance_criteria": task.analysis.acceptance_criteria if task.analysis else [],
                 "approved_files": task.technical_plan.affected_files if task.technical_plan else [],
                 "test": {"command": task.result.command, "exit_code": task.result.exit_code},
-                "diff": task.result.diff,
+                "diff": review_diff,
                 "current_files": current_files,
                 "developer_semantic_contract": self._latest_semantic_contract(task),
-                "baseline_deletion_candidates": [
-                    {
-                        "id": item["id"],
-                        "file": item["file"],
-                        "operation": item["operation"],
-                        "baseline_lines": [item["baseline_start_line"], item["baseline_end_line"]],
-                        "current_lines": [item["current_start_line"], item["current_end_line"]],
-                        "original_text": item["original_text"][:12000],
-                        "current_text": item["current_text"][:12000],
-                    }
-                    for item in baseline_deletion_candidates[:30]
-                ],
+                "baseline_deletion_candidates": review_candidates,
                 "valid_changed_lines": {path: [line for line, _ in lines] for path, lines in changed_lines.items()},
                 "schema": ReviewerModelOutput.model_json_schema(),
             }, ensure_ascii=False),
@@ -374,7 +381,11 @@ class CodeReviewAgent:
                     message="Review context exceeded its budget; review was not completed.",
                     suggestion="Narrow the review scope or increase the configured context budget before publishing.",
                 )], []
-            return [], []
+            return [ReviewFinding(
+                severity="high", category="model", blocking=True,
+                message="独立审查模型未返回有效审查结果，不能视为审查通过。",
+                suggestion="检查模型调用错误后重新审查；无需让 Developer 修改代码。",
+            )], []
         valid_paths = set(changed_lines)
         result: list[ReviewFinding] = []
         for finding in response.findings:
@@ -399,6 +410,64 @@ class CodeReviewAgent:
             if candidate_id in valid_restore_ids
         ]
         return result, restore_ids
+
+    @staticmethod
+    def _review_evidence(diff: str, current_files: dict[str, str], candidates: list[dict]):
+        """只对已验证完全相同的源码去重；保留删除证据、行号和恢复候选 ID。"""
+        snapshots = {path: text.splitlines() for path, text in current_files.items()}
+        packed, deleted = [], {}
+        pending = []
+        path, new_line = "", 0
+
+        def flush():
+            if pending:
+                reference = f"+ [新增内容见 current_files[{json.dumps(path)}] 第 {new_line - len(pending)}-{new_line - 1} 行]"
+                original = "\n".join(pending)
+                packed.extend([reference] if len(reference.encode()) < len(original.encode()) else pending)
+                pending.clear()
+
+        for line in diff.splitlines():
+            if line.startswith("+++ ") or line.startswith("@@") or line.startswith("diff --git"):
+                flush()
+                if line.startswith("+++ b/"):
+                    path = line[6:]
+                elif line.startswith("@@"):
+                    match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+                    new_line = int(match.group(1)) if match else 0
+                packed.append(line)
+            elif line.startswith("+") and not line.startswith("+++"):
+                source = snapshots.get(path, [])
+                if 0 < new_line <= len(source) and source[new_line - 1] == line[1:]:
+                    pending.append(line)
+                else:
+                    flush()
+                    packed.append(line)
+                new_line += 1
+            else:
+                flush()
+                packed.append(line)
+                if line.startswith("-") and not line.startswith("---"):
+                    deleted.setdefault(path, []).append(line[1:])
+                elif line.startswith(" "):
+                    new_line += 1
+        flush()
+        compact_candidates = []
+        for item in candidates[:30]:
+            entry = {"id": item["id"], "file": item["file"], "operation": item["operation"],
+                     "baseline_lines": [item["baseline_start_line"], item["baseline_end_line"]],
+                     "current_lines": [item["current_start_line"], item["current_end_line"]]}
+            old = item["original_text"].replace("\r\n", "\n")
+            current = item["current_text"].replace("\r\n", "\n")
+            if old.strip() and old.rstrip("\r\n") in "\n".join(deleted.get(item["file"], [])):
+                entry["original_text_reference"] = "Diff 中该文件 baseline_lines 对应的删除行"
+            else:
+                entry["original_text"] = old[:12000]
+            if current.strip() and current.rstrip("\r\n") in current_files.get(item["file"], ""):
+                entry["current_text_reference"] = "current_files 中该文件 current_lines 对应的源码"
+            else:
+                entry["current_text"] = current[:12000]
+            compact_candidates.append(entry)
+        return "\n".join(packed), compact_candidates
 
     @staticmethod
     def _latest_semantic_contract(task: Task) -> dict[str, list[str]]:
