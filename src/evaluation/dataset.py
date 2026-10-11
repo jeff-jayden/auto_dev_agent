@@ -23,6 +23,7 @@ from evaluation.retrieval import RetrievalCase, RetrievalEvaluator, evaluate_rep
 
 LEGACY_DATASET_ID = "cfe-unit-r02-r49"
 ENRICHMENT_DATASET_ID = "cfe-unit-r51-r100"
+RESILIENCE_DATASET_ID = "cfe-unit-r101-r150"
 MANUAL_DATASET_ID = "manual"
 BUILTIN_DATASETS = {
     LEGACY_DATASET_ID: {
@@ -34,6 +35,12 @@ BUILTIN_DATASETS = {
     ENRICHMENT_DATASET_ID: {
         "label": "新测试集 R51–R100（50 条）",
         "filename": "cfe_unit_enrichment_rag_cases.json",
+        "case_count": 50,
+        "recommended_k": 5,
+    },
+    RESILIENCE_DATASET_ID: {
+        "label": "最新测试集 R101–R150（50 条）",
+        "filename": "cfe_unit_resilience_rag_cases.json",
         "case_count": 50,
         "recommended_k": 5,
     },
@@ -52,7 +59,7 @@ class DatasetImportRequest(BaseModel):
 
 class BuiltinDatasetImportRequest(BaseModel):
     repository_id: str | None = None
-    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100"] = LEGACY_DATASET_ID
+    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100", "cfe-unit-r101-r150"] = LEGACY_DATASET_ID
 
 
 class AnnotationRequest(BaseModel):
@@ -69,7 +76,7 @@ class DatasetEvaluationRequest(BaseModel):
     split: Literal["dev", "test"] = "dev"
     k: int = Field(default=3, ge=1, le=20)
     repository_id: str | None = None
-    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100", "manual"] | None = None
+    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100", "cfe-unit-r101-r150", "manual"] | None = None
 
 
 class DatasetConflict(ValueError):
@@ -90,6 +97,9 @@ class RagDatasetService:
             LEGACY_DATASET_ID: self.builtin_dataset_path,
             ENRICHMENT_DATASET_ID: (
                 Path(__file__).resolve().parent / "datasets" / "cfe_unit_enrichment_rag_cases.json"
+            ),
+            RESILIENCE_DATASET_ID: (
+                Path(__file__).resolve().parent / "datasets" / "cfe_unit_resilience_rag_cases.json"
             ),
         }
         self._evaluation_lock = threading.Lock()
@@ -123,6 +133,8 @@ class RagDatasetService:
             return LEGACY_DATASET_ID
         if "cfe-unit-youtube-enrichment-file-recall-v2" in source_id:
             return ENRICHMENT_DATASET_ID
+        if "cfe-unit-youtube-resilience-file-recall-v3" in source_id:
+            return RESILIENCE_DATASET_ID
         return MANUAL_DATASET_ID
 
     @staticmethod

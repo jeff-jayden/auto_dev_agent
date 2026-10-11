@@ -9,9 +9,10 @@ from unittest.mock import patch
 import pytest
 
 from domain.models import Repository, RepositoryAnalysis, Task, TaskStatus
-from evaluation.dataset import (ENRICHMENT_DATASET_ID, LEGACY_DATASET_ID, MANUAL_DATASET_ID,
-                                AnnotationRequest, BuiltinDatasetImportRequest, DatasetConflict,
-                                DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService)
+from evaluation.dataset import (BUILTIN_DATASETS, ENRICHMENT_DATASET_ID, LEGACY_DATASET_ID,
+                                MANUAL_DATASET_ID, RESILIENCE_DATASET_ID, AnnotationRequest,
+                                BuiltinDatasetImportRequest, DatasetConflict, DatasetEvaluationRequest,
+                                DatasetImportRequest, RagDatasetService)
 from infrastructure.store import SQLiteTaskStore
 from scm.github import GitHubClient
 
@@ -68,6 +69,17 @@ def builtin_manifest(path, repo):
     return path
 
 
+def test_builtin_dataset_manifests_match_catalog():
+    dataset_root = Path(__file__).parents[1] / "src" / "evaluation" / "datasets"
+    for metadata in BUILTIN_DATASETS.values():
+        manifest = json.loads((dataset_root / metadata["filename"]).read_text(encoding="utf-8"))
+        cases = manifest["cases"]
+        assert len(cases) == metadata["case_count"]
+        assert len({case["requirement_id"] for case in cases}) == len(cases)
+        assert len({case["query"] for case in cases}) == len(cases)
+        assert all(case["expected_files"] for case in cases)
+
+
 def test_import_is_pending_idempotent_and_preserves_labels(dataset):
     service, case, task, _ = dataset
     assert case["state"] == "pending"
@@ -111,7 +123,7 @@ def test_overview_exposes_dataset_options_and_normalizes_existing_cases(dataset)
     service, _, _, _ = dataset
     overview = service.overview()
     assert [item["id"] for item in overview["builtin_datasets"]] == [
-        LEGACY_DATASET_ID, ENRICHMENT_DATASET_ID
+        LEGACY_DATASET_ID, ENRICHMENT_DATASET_ID, RESILIENCE_DATASET_ID
     ]
     assert overview["cases"][0]["dataset_id"] == MANUAL_DATASET_ID
 
