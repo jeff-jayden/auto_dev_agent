@@ -138,6 +138,9 @@ SEMANTIC_ALIASES = {
     "数据导出导入": ["backuppanel", "backup", "import export"],
     "观看洞察": ["insightspage", "viewing insights", "analytics"],
     "命令导航": ["commandpalette", "command palette", "navigation commands"],
+    "简介展开": ["description", "expand description", "collapse description"],
+    "展开和收起": ["expand", "collapse", "description"],
+    "回归测试": ["app test", "regression tests", "test suite"],
     # Atomic wording variants keep the expansion useful when product prose
     # separates the noun and action (for example “复制已有视频…为草稿”).
     "屏蔽": ["block", "blocked", "dismiss", "cardmenu"],
