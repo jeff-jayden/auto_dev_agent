@@ -24,6 +24,10 @@ SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss"}
 TEST_MARKERS = ("test", "spec", "__tests__")
 LEXICAL_FIELD_WEIGHTS = {"path": 8.0, "symbols": 6.0, "imports": 3.0, "body": 1.0}
 LEXICAL_MIN_SCORE = 1.5
+SEMANTIC_CHUNK_CANDIDATES = 64
+CONTEXT_CANDIDATE_LIMIT = 18
+CONTEXT_DEPENDENCY_SEEDS = 8
+GENERIC_ROLE_TERMS = {"video", "player", "watch", "channel", "page", "view", "screen", "file", "data"}
 QUERY_STOP_TERMS = {
     "一个", "一些", "以及", "进行", "功能", "实现", "增加", "新增", "修改", "支持",
     "提供", "完成", "正确", "统一", "页面", "组件", "文件",
@@ -60,8 +64,26 @@ SEMANTIC_ALIASES = {
     "工作台": ["studio", "dashboard", "workspace"],
     "全局状态": ["store", "context", "provider", "state"],
     "路由": ["route", "router", "navigate", "pathname"],
-    "播放列表": ["playlist", "collection"],
+    "播放列表": ["playlist", "playlists", "collection"],
     "稍后观看": ["watchlater", "watch", "later"],
+    "热门": ["trending", "popular"],
+    "媒体库": ["library"],
+    "统计面板": ["analytics", "studio", "dashboard"],
+    "点赞": ["reaction", "reactions", "like"],
+    "不喜欢": ["reaction", "reactions", "dislike"],
+    "格式化": ["format", "formatter"],
+    "侧边栏": ["sidebar", "navigation", "nav"],
+    "过滤": ["filter", "filters", "select", "selector"],
+    "删除": ["delete", "remove"],
+    "编辑": ["edit", "update"],
+    "评论": ["comment", "comments"],
+    "网格": ["grid"],
+    "顶部导航栏": ["header", "navbar", "topbar"],
+    "响应式": ["responsive", "layout", "media"],
+    "断点": ["breakpoint", "responsive", "media"],
+    "个人资料": ["profile", "avatar", "account"],
+    "首页": ["home", "landing"],
+    "应用装配": ["app", "application", "bootstrap"],
 }
 
 
@@ -163,7 +185,8 @@ class RepositoryCodeIndex:
     ) -> tuple[RepositoryContextPack, list[CodeEvidence]]:
         records: dict[str, dict] = index.get("files", {})
         terms = self._requirement_terms(requirement)
-        ranked_hits = self.rank_files(index, requirement, strategy="hybrid")
+        raw_hits = self.rank_files(index, requirement, strategy="hybrid")
+        ranked_hits = self.rank_context_files(index, requirement, ranked_hits=raw_hits)
         scores = {item["path"]: int(round(item["score"] * 1000)) for item in ranked_hits}
         reasons: dict[str, list[str]] = {}
         for item in ranked_hits:
@@ -231,10 +254,11 @@ class RepositoryCodeIndex:
                 referenced_by=record.get("referenced_by", [])[:20],
             ))
         evidence = self._evidence(repository, selected, terms, reasons)
+        raw_by_path = {item["path"]: item for item in raw_hits}
         chunk_evidence = [
             CodeEvidence(path=hit["path"], line=chunk["start_line"], snippet=chunk["text"],
                          reason=f"真实向量检索 {chunk['symbol']}，行 {chunk['start_line']}-{chunk['end_line']}，相似度 {chunk['score']:.3f}")
-            for hit in ranked_hits if hit["path"] in selected
+            for hit in (raw_by_path[path] for path in selected if path in raw_by_path)
             for chunk in hit.get("chunks", [])[:2]
         ]
         if chunk_evidence:
@@ -259,11 +283,16 @@ class RepositoryCodeIndex:
         """
         normalized = requirement.lower().replace("\\", "/")
         compact = re.sub(r"[^\w]", "", normalized)
+        query_terms = {
+            term for term, weight in self._lexical_query_terms(requirement).items()
+            if weight > 1.0 and term not in GENERIC_ROLE_TERMS
+        }
         candidates = [path for path in ranked if path in records and not self._is_test(path)]
         explicit = [path for path in candidates if re.search(
             r"(?<![\w./-])" + re.escape(path.lower()) + r"(?![\w./-])", normalized
         ) or re.search(r"(?<![\w.-])" + re.escape(Path(path).name.lower()) + r"(?![\w.-])", normalized)]
         styles = {".css", ".scss"}
+        wants_styles = any(term in requirement for term in ("样式", "主题", "响应式", "断点", "布局"))
         generic = {"app", "index", "main", "server", "utils", "helpers", "common", "styles"}
 
         def matches_target(path: str) -> bool:
@@ -271,8 +300,9 @@ class RepositoryCodeIndex:
             target = re.sub(r"(?:page|panel|view|component|service|controller|handler)$", "", stem)
             return any(len(value) >= 4 and value not in generic and value in compact for value in (stem, target))
 
-        named = [path for path in candidates if Path(path).suffix.lower() not in styles
-                 and matches_target(path)]
+        named = [path for path in candidates if (Path(path).suffix.lower() not in styles or wants_styles)
+                 and (matches_target(path) or query_terms & set(self._tokenize(Path(path).stem))
+                      or query_terms & {term for symbol in records[path].get("symbols", []) for term in self._tokenize(symbol)})]
         if explicit or named:
             return list(dict.fromkeys([*explicit, *named]))[:6]
         symbols = [path for path in candidates if Path(path).suffix.lower() not in styles and any(
@@ -304,7 +334,7 @@ class RepositoryCodeIndex:
 
         chunks_by_path: dict[str, list[dict]] = {}
         if self.vector_store:
-            for chunk in self.vector_store.search(index, requirement):
+            for chunk in self.vector_store.search(index, requirement, k=SEMANTIC_CHUNK_CANDIDATES):
                 chunks_by_path.setdefault(chunk["path"], []).append(chunk)
             semantic_scores = {path: max(chunk["score"] for chunk in chunks) for path, chunks in chunks_by_path.items()}
         else:
@@ -334,6 +364,84 @@ class RepositoryCodeIndex:
                 reasons.append(f"{prefix}相似度 {semantic_scores[path]:.3f}")
             hits.append({"path": path, "score": fused, "reasons": reasons, "chunks": chunks_by_path.get(path, [])})
         return sorted(hits, key=lambda item: (-item["score"], item["path"]))
+
+    def rank_context_files(
+        self,
+        index: dict,
+        requirement: str,
+        *,
+        limit: int | None = None,
+        ranked_hits: list[dict] | None = None,
+    ) -> list[dict]:
+        """扩大原始候选，沿代码关系补充文件，再按目标角色统一重排。
+
+        词法/哈希基线和真实 Embedding 都调用这一阶段；传入 ``ranked_hits`` 可避免
+        对远程向量服务发起第二次相同查询。返回结果仍保留原始 RRF 理由与代码块证据。
+        """
+        records: dict[str, dict] = index.get("files", {})
+        raw = ranked_hits if ranked_hits is not None else self.rank_files(index, requirement, strategy="hybrid")
+        if not raw:
+            return []
+        candidate_limit = max(CONTEXT_CANDIDATE_LIMIT, (limit or 0) * 4)
+        raw = raw[:candidate_limit]
+        by_path = {item["path"]: {**item, "reasons": list(item.get("reasons", []))} for item in raw}
+        raw_rank = {item["path"]: rank for rank, item in enumerate(raw, 1)}
+        relation_scores: dict[str, float] = {}
+
+        for seed_rank, item in enumerate(raw[:max(CONTEXT_DEPENDENCY_SEEDS, (limit or 0) * 2)], 1):
+            seed = item["path"]
+            record = records.get(seed, {})
+            for relation, weight in (("imports", 0.16), ("referenced_by", 0.12)):
+                for related in record.get(relation, []):
+                    if related not in records or related == seed:
+                        continue
+                    relation_scores[related] = max(relation_scores.get(related, 0.0), weight / seed_rank)
+                    if related not in by_path:
+                        by_path[related] = {"path": related, "score": 0.0, "reasons": [], "chunks": []}
+                    label = "依赖" if relation == "imports" else "调用方"
+                    reason = f"由候选 {seed} 扩展的{label}"
+                    if reason not in by_path[related]["reasons"]:
+                        by_path[related]["reasons"].append(reason)
+            stem = Path(seed).stem.lower().replace("index", "")
+            for related in records:
+                if self._is_test(related) and ((stem and stem in related.lower()) or Path(seed).name.lower() in records[related].get("search_text", "")):
+                    relation_scores[related] = max(relation_scores.get(related, 0.0), 0.1 / seed_rank)
+                    by_path.setdefault(related, {"path": related, "score": 0.0, "reasons": [], "chunks": []})
+                    reason = f"覆盖候选 {seed} 的测试"
+                    if reason not in by_path[related]["reasons"]:
+                        by_path[related]["reasons"].append(reason)
+            for suffix in (".css", ".scss"):
+                related = str(Path(seed).with_suffix(suffix)).replace("\\", "/")
+                if related in records:
+                    relation_scores[related] = max(relation_scores.get(related, 0.0), 0.1 / seed_rank)
+                    by_path.setdefault(related, {"path": related, "score": 0.0, "reasons": [], "chunks": []})
+                    reason = f"候选 {seed} 的同名样式"
+                    if reason not in by_path[related]["reasons"]:
+                        by_path[related]["reasons"].append(reason)
+
+        paths = list(by_path)
+        primary = set(self._primary_files(records, paths, requirement))
+        query_terms = set(self._lexical_query_terms(requirement))
+        wants_tests = any(term in requirement.lower() for term in ("测试", "回归", "test", "spec"))
+        reranked = []
+        for path, item in by_path.items():
+            rank_score = 1.0 / (4 + raw_rank[path]) if path in raw_rank else 0.0
+            path_terms = set(self._tokenize(path))
+            symbol_terms = {term for symbol in records[path].get("symbols", []) for term in self._tokenize(symbol)}
+            overlap = len(query_terms & (path_terms | symbol_terms))
+            role_score = 0.3 if path in primary else 0.0
+            role_score += min(0.18, overlap * 0.06)
+            role_score += min(0.09, self._lexical_role_bonus(path, requirement) * 0.03)
+            if self._is_test(path):
+                role_score += 0.3 if wants_tests else -0.08
+            score = rank_score + relation_scores.get(path, 0.0) + role_score
+            role = "primary" if path in primary else "test" if self._is_test(path) else "dependency" if path in relation_scores else "candidate"
+            reasons = list(item.get("reasons", []))
+            if path in primary:
+                reasons.append("文件路径或符号与需求目标角色匹配")
+            reranked.append({**item, "score": score, "reasons": list(dict.fromkeys(reasons)), "context_role": role})
+        result = sorted(reranked, key=lambda item: (-item["score"], raw_rank.get(item["path"], 10_000), item["path"]))
+        return result[:limit] if limit is not None else result
 
     def _lexical_scores(
         self, records: dict[str, dict], requirement: str

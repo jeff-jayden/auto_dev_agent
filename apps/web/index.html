@@ -65,7 +65,7 @@
               <p id="rag-counts" role="status"></p><div id="rag-import-result"></div>
             </section>
             <div class="rag-label-layout"><aside class="panel"><h2>人工标注</h2><label>筛选<select id="rag-filter"><option value="pending">待确认</option><option value="confirmed">已确认</option><option value="excluded">已排除</option><option value="all">全部</option></select></label><div id="rag-case-list"></div></aside><section class="panel" id="rag-editor"><p>提取候选后，选择样本开始标注。</p></section></div>
-            <section class="panel"><h2>检索 A/B 评测</h2><p>BM25F 词法 + 本地语义基线 → Embedding + Chroma 混合检索。开发集用于调参，测试集留作最终验收；只统计已确认的样本。</p><div class="rag-toolbar"><label>分组<select id="rag-eval-split"><option value="dev">开发集</option><option value="test">测试集</option></select></label><label>Top K<input id="rag-k" type="number" min="1" max="20" value="3"></label><button type="button" id="rag-evaluate">评测已确认样本</button></div><div id="rag-report"><p>尚未运行人工标注数据集评测。</p></div></section>
+            <section class="panel"><h2>检索 A/B 评测</h2><p>同时展示原始召回，以及统一经过候选扩大、依赖扩展和文件角色重排后的 Agent 最终上下文。开发集用于调参，测试集留作最终验收；只统计已确认的样本。</p><div class="rag-toolbar"><label>分组<select id="rag-eval-split"><option value="dev">开发集</option><option value="test">测试集</option></select></label><label>Top K<input id="rag-k" type="number" min="1" max="20" value="3"></label><button type="button" id="rag-evaluate">评测已确认样本</button></div><div id="rag-report"><p>尚未运行人工标注数据集评测。</p></div></section>
           </section>
 
           <section id="empty-state" class="workspace-view requirement-layout">
@@ -153,7 +153,7 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
-    <script src="/assets/rag.js?v=2"></script>
+    <script src="/assets/rag.js?v=3"></script>
     <script src="/assets/app.js?v=56"></script>
   </body>
 </html>

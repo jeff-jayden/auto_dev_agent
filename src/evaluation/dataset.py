@@ -328,10 +328,13 @@ class RagDatasetService:
 
     def _evaluate(self, cases: list[dict], request) -> dict:
         engine = self.indexer_factory()
-        rows, details, errors, latencies = [], [], [], {"baseline": [], "hybrid": []}
+        rows, context_rows, details, errors = [], [], [], []
+        latencies = {"baseline": [], "hybrid": []}
+        context_latencies = {"baseline": [], "hybrid": []}
         report = {"id": uuid4().hex, "created_at": now(), "split": request.split, "k": request.k,
                   "requested_count": len(cases), "dataset_snapshot": cases,
-                  "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1"}
+                  "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1",
+                  "context_strategy": "expanded_dependency_role_rerank_v1"}
         groups = {}
         for case in cases:
             groups.setdefault((case["repository_id"], case["base_sha"]), []).append(case)
@@ -358,33 +361,47 @@ class RagDatasetService:
                     result = evaluate_repository(snapshot, {"name": "human_confirmed", "cases": labels}, engine, request.k,
                                                  repository_identity=f"rag-evaluation:{repository_id}:{full_sha}", baseline_sha=full_sha)
                 for case, detail in zip(group, result["cases"]):
+                    detail.setdefault("baseline_context_files", detail["baseline_files"])
+                    detail.setdefault("hybrid_context_files", detail["hybrid_files"])
                     required = {item["path"] for item in case["candidates"] if item["label"] == "required"}
                     detail.update(title=case["title"], base_sha=full_sha, repository_id=repository_id,
                                   annotation_revision=case["revision"], content_fingerprint=result["content_fingerprint"])
                     for name in ("baseline", "hybrid"):
-                        ranked = detail[name + "_files"]
-                        detail[name + "_required_recall"] = round(100 * len(required & set(ranked)) / len(required), 2)
+                        for suffix in ("", "_context"):
+                            ranked = detail[name + suffix + "_files"]
+                            detail[name + suffix + "_required_recall"] = round(100 * len(required & set(ranked)) / len(required), 2)
                     details.append(detail)
-                    rows.append((RetrievalCase(case["id"], case["query"], tuple(detail["expected_files"]), {}), detail["baseline_files"], detail["hybrid_files"]))
+                    retrieval_case = RetrievalCase(case["id"], case["query"], tuple(detail["expected_files"]), {})
+                    rows.append((retrieval_case, detail["baseline_files"], detail["hybrid_files"]))
+                    context_rows.append((retrieval_case, detail["baseline_context_files"], detail["hybrid_context_files"]))
                 for name in latencies:
                     latencies[name].extend([result["average_query_ms"][name]] * len(group))
+                    final_timings = result.get("average_final_context_ms", result["average_query_ms"])
+                    context_latencies[name].extend([final_timings[name]] * len(group))
                 report["embedding_model"] = result["embedding_model"]
                 report["embedding_signature"] = result["embedding_signature"]
             except Exception as error:
                 # Chroma/Embedding 各自异常基类不同，均需保留失败覆盖数，不能退回 HTML 500。
                 errors.extend({"case_id": case["id"], "title": case["title"], "reason": str(error)[:600]} for case in group)
         evaluator = RetrievalEvaluator(k=request.k)
-        metrics = {}
+        metrics, context_metrics = {}, {}
         for name, position in (("baseline", 1), ("hybrid", 2)):
             if not rows:
                 metrics[name] = None
+                context_metrics[name] = None
                 continue
             metrics[name] = evaluator._metrics(rows, position=position).model_dump()
             metrics[name]["precision_at_k"] = round(100 * sum(len(set(row[position]) & set(row[0].expected_files)) / request.k for row in rows) / len(rows), 2)
             metrics[name]["required_recall_at_k"] = round(sum(detail[name + "_required_recall"] for detail in details) / len(details), 2)
+            context_metrics[name] = evaluator._metrics(context_rows, position=position).model_dump()
+            context_metrics[name]["precision_at_k"] = round(100 * sum(len(set(row[position]) & set(row[0].expected_files)) / request.k for row in context_rows) / len(context_rows), 2)
+            context_metrics[name]["required_recall_at_k"] = round(sum(detail[name + "_context_required_recall"] for detail in details) / len(details), 2)
         report.update(status="failed" if not rows else "partial" if errors else "completed", evaluated_count=len(rows),
                       cases=details, errors=errors, **metrics,
                       delta={key: round(metrics["hybrid"][key] - metrics["baseline"][key], 2) for key in metrics["baseline"]} if rows else {},
+                      baseline_context=context_metrics["baseline"], hybrid_context=context_metrics["hybrid"],
+                      context_delta={key: round(context_metrics["hybrid"][key] - context_metrics["baseline"][key], 2) for key in context_metrics["baseline"]} if rows else {},
                       average_query_ms={name: round(sum(values) / len(values), 2) if values else None for name, values in latencies.items()},
-                      limitations="仅人工确认样本；Recall/MRR/Hit 的相关集合为必要+辅助，另报必要文件 Recall。未知相关文件可能被当作无关。失败样本不计入指标，必须结合覆盖数和错误查看。")
+                      average_final_context_ms={name: round(sum(values) / len(values), 2) if values else None for name, values in context_latencies.items()},
+                      limitations="原始检索衡量召回器本身；最终上下文统一经过扩大候选、依赖扩展和文件角色重排。仅人工确认样本；Recall/MRR/Hit 的相关集合为必要+辅助，另报必要文件 Recall。未知相关文件可能被当作无关。失败样本不计入指标，必须结合覆盖数和错误查看。")
         return self.store.save_rag_dataset_run(report)

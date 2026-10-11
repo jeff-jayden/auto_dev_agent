@@ -262,3 +262,7 @@ def test_real_evaluator_contract_integration(dataset, tmp_path):
     assert len(report["cases"]) == 1
     assert report["cases"][0]["base_sha"] == case["base_sha"]
     assert report["cases"][0]["hybrid_files"]
+    assert report["cases"][0]["hybrid_context_files"]
+    assert report["baseline_context"]
+    assert report["hybrid_context"]
+    assert report["context_strategy"] == "expanded_dependency_role_rerank_v1"

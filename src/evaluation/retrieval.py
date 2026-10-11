@@ -220,29 +220,44 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
         if not set(case["expected_files"]) <= set(index["files"]):
             raise ValueError(f"评测标签含不存在或未被索引的文件：{case.get('name', '')}")
     baseline = RepositoryCodeIndex()
-    rows, timings, results = [], {"baseline": [], "hybrid": []}, []
+    rows, context_rows, results = [], [], []
+    timings = {"baseline": [], "hybrid": []}
+    context_timings = {"baseline": [], "hybrid": []}
     # 单独计入建库耗时，查询计时不混入冷启动建库；空字符串不触发建库。
     started = perf_counter()
     indexer.vector_store.search(index, labels[0]["query"], k=1)
     indexing_ms = (perf_counter() - started) * 1000
     for case in labels:
         ranked = {}
+        context_ranked = {}
         full = {}
         for name, engine in (("baseline", baseline), ("hybrid", indexer)):
             started = perf_counter()
-            full[name] = engine.rank_files(index, case["query"], strategy="hybrid")[:k]
+            raw = engine.rank_files(index, case["query"], strategy="hybrid")
+            raw_elapsed = (perf_counter() - started) * 1000
+            full[name] = raw[:k]
             ranked[name] = [item["path"] for item in full[name]]
-            timings[name].append((perf_counter() - started) * 1000)
+            timings[name].append(raw_elapsed)
+            context_started = perf_counter()
+            context = engine.rank_context_files(index, case["query"], limit=k, ranked_hits=raw)
+            context_ranked[name] = [item["path"] for item in context]
+            context_timings[name].append(raw_elapsed + (perf_counter() - context_started) * 1000)
         rows.append((RetrievalCase(case.get("name", case["query"]), case["query"], tuple(case["expected_files"]), {}), ranked["baseline"], ranked["hybrid"]))
+        context_rows.append((rows[-1][0], context_ranked["baseline"], context_ranked["hybrid"]))
         results.append({"name": case.get("name"), "query": case["query"], "expected_files": case["expected_files"],
                         "baseline_files": ranked["baseline"], "hybrid_files": ranked["hybrid"],
+                        "baseline_context_files": context_ranked["baseline"],
+                        "hybrid_context_files": context_ranked["hybrid"],
                         "retrieved_chunks": [{key: chunk[key] for key in ("path", "symbol", "start_line", "end_line", "score")}
                                              for item in full["hybrid"] for chunk in item.get("chunks", [])[:2]]})
     evaluator = RetrievalEvaluator(k=k)
     old = evaluator._metrics(rows, position=1).model_dump()
     new = evaluator._metrics(rows, position=2).model_dump()
+    old_context = evaluator._metrics(context_rows, position=1).model_dump()
+    new_context = evaluator._metrics(context_rows, position=2).model_dump()
     return {"dataset": dataset.get("name", "custom"), "dataset_kind": "real_repository", "case_count": len(rows), "k": k,
             "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1",
+            "context_strategy": "expanded_dependency_role_rerank_v1",
             "repository": str(repository.resolve()), "head_sha": head,
             "content_fingerprint": hashlib.sha256(json.dumps([(p, r["hash"]) for p, r in sorted(index["files"].items())]).encode()).hexdigest(),
             "embedding_model": indexer.vector_store.embedding.model,
@@ -250,7 +265,10 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
             "index_mode": mode, "indexing_ms": round(indexing_ms, 2),
             "baseline": old, "hybrid": new,
             "delta": {key: round(new[key] - old[key], 2) for key in old},
+            "baseline_context": old_context, "hybrid_context": new_context,
+            "context_delta": {key: round(new_context[key] - old_context[key], 2) for key in old_context},
             "average_query_ms": {name: round(sum(values) / len(values), 2) for name, values in timings.items()},
+            "average_final_context_ms": {name: round(sum(values) / len(values), 2) for name, values in context_timings.items()},
             "cases": results,
             "limitations": "文件级标注集；不是功能成功率或人工验收结论。首个查询预热成本记入 indexing_ms。小样本结果不能外推生产收益。"}
 

@@ -42,6 +42,35 @@ def test_explicit_multiple_files_and_style_only_request():
     assert engine._primary_files(records, list(records), "给 YourVideos 增加切换") == ["src/pages/YourVideos.js"]
 
 
+def test_context_ranking_expands_dependency_and_prefers_definition_role():
+    engine = RepositoryCodeIndex()
+    records = {
+        "src/features/watch/WatchPage.js": {
+            "symbols": ["WatchPage"], "imports": ["src/features/watch/Reactions.js"],
+            "referenced_by": [], "search_text": "render reactions",
+        },
+        "src/features/watch/Player.js": {
+            "symbols": ["Player"], "imports": [], "referenced_by": [], "search_text": "video player",
+        },
+        "src/features/watch/Reactions.js": {
+            "symbols": ["Reactions"], "imports": [],
+            "referenced_by": ["src/features/watch/WatchPage.js"], "search_text": "like dislike",
+        },
+    }
+    raw = [
+        {"path": "src/features/watch/WatchPage.js", "score": 1.0, "reasons": [], "chunks": []},
+        {"path": "src/features/watch/Player.js", "score": 0.9, "reasons": [], "chunks": []},
+    ]
+
+    ranked = engine.rank_context_files(
+        {"files": records}, "实现点赞与不喜欢互斥操作", limit=3, ranked_hits=raw,
+    )
+
+    assert ranked[0]["path"] == "src/features/watch/Reactions.js"
+    assert ranked[0]["context_role"] == "primary"
+    assert any("扩展的依赖" in reason for reason in ranked[0]["reasons"])
+
+
 def test_generic_plan_language_does_not_expand_write_scope():
     repository = RepositoryAnalysis(language="javascript", framework="react", file_count=4,
         entrypoints=["src/index.js"], context_pack=RepositoryContextPack(
