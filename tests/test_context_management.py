@@ -31,9 +31,11 @@ def test_summary_is_persisted_and_failed_requirement_stays_protected(tmp_path):
     context = build_task_context(reloaded)
     summary = reloaded.metadata["task_summary"]
     assert summary["user_requirements"][0]["status"] == "requested_not_assumed_complete"
-    assert summary["actual_progress"][0]["status"] == "failed"
-    assert summary["actual_progress"][1]["rolled_back"]
-    assert summary["actual_progress"][1]["user_acceptance"] == "not_inferred_from_tests"
+    assert "actual_progress" not in summary
+    assert "latest_development" not in summary
+    assert context["working_memory"]["delivery"]["user_acceptance"] == "not_inferred_from_tests"
+    assert query_task_history(reloaded, round_number=1)["records"][0]["status"] == "failed"
+    assert query_task_history(reloaded, round_number=2)["records"][0]["rolled_back"]
     assert summary["protected_requirements"] == [{"source_round": 1, "text": "must preserve keyboard navigation"}]
     assert len(context["feedback_history"]) == 3
     assert "old evidence" not in json.dumps(context)

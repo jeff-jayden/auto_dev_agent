@@ -6,6 +6,11 @@
 
 原始记录保存在 SQLite `tasks.data`。`build_task_context` 从中构建 `working_memory`：
 当前状态和错误、最近失败轮次、最新开发输出、未完成步骤、最近审查和 PR 信息。
+任务摘要 v3 只保存原始需求、验收标准、有效性/撤销标记、约束及历史索引；
+不再包含 actual_progress 或 latest_development。最近对话只保留用户请求与撤销语义，
+轮次执行结果和最终 current_result 统一位于 working_memory。
+摘要哈希只跟踪需求及撤销变化，执行状态变化不会使需求索引失效。
+旧 v2 摘要在下一次保存或组装上下文时重建；完整对话和开发尝试保持原样，可继续分页查询。
 历史失败标记为历史证据，不能覆盖后续成功记录；测试成功不能推断用户验收或发布成功。
 `query_execution_memory` 按开发记录 offset 和 text_offset 分页读取完整输出。
 已有 `query_task_history` 继续查询原始需求、反馈和 Diff。

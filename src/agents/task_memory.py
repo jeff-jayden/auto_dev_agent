@@ -25,18 +25,29 @@ def query_execution_memory(task, offset=0, text_offset=0, limit=2):
             "next_offset": offset + len(records) if offset + len(records) < len(attempts) else None}
 
 
-def working_memory(task):
+def working_memory(task, *, recent_rounds=3):
+    """Single projection of execution state; requirements live in task_context."""
     rounds = task.metadata.get("user_feedback_rounds", [])
     failed = next(((i, r) for i, r in reversed(list(enumerate(rounds, 1)))
                    if r.get("status") == "failed" and not r.get("rolled_back_at")), None)
     latest = task.development_attempts[-1] if task.development_attempts else None
     review = task.reviews[-1] if task.reviews else None
     return {"task_status": task.status.value, "current_error": excerpt(task.error or ""),
+            "recent_rounds": [
+                {"source_round": index, "status": item.get("status", "unknown"),
+                 "result": excerpt(item.get("agent_message", "")),
+                 "changed_files": item.get("changed_files", []),
+                 "test_exit_code": item.get("test_exit_code"),
+                 "rolled_back": bool(item.get("rolled_back_at")) or item.get("operation") == "rollback"}
+                for index, item in list(enumerate(rounds, 1))[-recent_rounds:]],
+            "current_result": None if task.result is None else {
+                "test_exit_code": task.result.exit_code, "has_changes": bool(task.result.diff)},
             "latest_failed_round": None if not failed else {
                 "source_round": failed[0], "error": excerpt(failed[1].get("agent_message", "")),
                 "historical_failure_not_necessarily_current": True},
             "latest_execution": None if latest is None else {
                 "attempt": latest.attempt, "test_exit_code": latest.exit_code,
+                "summary": excerpt(latest.summary),
                 "output_excerpt": excerpt(latest.output), "changed_files": latest.changed_files,
                 "history_offset": len(task.development_attempts) - 1},
             "steps": [{"step_id": s.step_id, "status": s.status, "error": excerpt(s.error or "")}

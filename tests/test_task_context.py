@@ -39,8 +39,9 @@ def test_history_survives_reload_and_reaches_developer_prompt():
     payload = json.loads(gateway.generate_structured.call_args.args[1])
     history = payload["task_context"]["feedback_history"]
     assert history[0]["request"] == "按钮改蓝色"
-    assert history[0]["changed_files"] == ["app.js"]
-    assert history[1]["status"] == "running"
+    progress = payload["task_context"]["working_memory"]["recent_rounds"]
+    assert progress[0]["changed_files"] == ["app.js"]
+    assert progress[1]["status"] == "running"
     assert payload["repository_context"] == {"app.js": "blue"}
 
 
