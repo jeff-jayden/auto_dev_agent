@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import posixpath
 import re
 from uuid import uuid4
 from collections import Counter
@@ -19,7 +20,7 @@ from domain.models import CodeEvidence, ContextFile, RepositoryContextPack
 from code_intelligence.vector_store import CodeVectorStore, code_chunks
 
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss"}
 TEST_MARKERS = ("test", "spec", "__tests__")
 LEXICAL_FIELD_WEIGHTS = {"path": 8.0, "symbols": 6.0, "imports": 3.0, "body": 1.0}
@@ -84,6 +85,70 @@ SEMANTIC_ALIASES = {
     "个人资料": ["profile", "avatar", "account"],
     "首页": ["home", "landing"],
     "应用装配": ["app", "application", "bootstrap"],
+    # Product-language intents need explicit code vocabulary.  The embedding
+    # model is multilingual, but repository identifiers are predominantly
+    # English and short feature names otherwise lose to generic page content.
+    "搜索历史": ["searchhistory", "search history", "recent searches"],
+    "搜索建议": ["searchsuggestions", "search suggestions", "autocomplete"],
+    "上传时间": ["upload date", "published at", "date filter"],
+    "上传时间筛选": ["filters", "select videos", "date filter"],
+    "已看": ["watched", "history", "progress"],
+    "未看": ["unwatched", "history", "progress"],
+    "一键重置": ["reset", "clear filters"],
+    "不感兴趣": ["not interested", "dismiss", "card menu"],
+    "屏蔽频道": ["block channel", "blocked channels", "card menu"],
+    "继续观看": ["continuewatching", "continue watching", "resume progress"],
+    "分类探索": ["explorepage", "explore categories", "category discovery"],
+    "网格密度": ["videogrid", "grid density", "compact grid"],
+    "播放速度": ["speedcontrol", "playback rate", "playbackrate"],
+    "音量": ["volume", "muted", "player"],
+    "静音": ["mute", "muted", "volume"],
+    "快进快退": ["seekcontrols", "seek controls", "currenttime"],
+    "循环播放": ["loop", "player"],
+    "影院模式": ["theater mode", "theater", "watchpage"],
+    "画中画": ["pictureinpicture", "picture in picture", "pip"],
+    "开始时间": ["start time", "timestamp", "currenttime"],
+    "时间点书签": ["bookmarks", "timestamp bookmarks"],
+    "视频章节": ["chapters", "video chapters"],
+    "字幕轨道": ["captions", "subtitle track", "vtt"],
+    "文本稿": ["transcript", "caption cues"],
+    "播放队列": ["queuepanel", "play queue", "queue"],
+    "上下排序": ["reorder", "move up", "move down"],
+    "下一集": ["next video", "queue", "autoplay"],
+    "评论编辑": ["editcomment", "edit comment"],
+    "评论回复": ["replies", "comment replies", "thread"],
+    "评论置顶": ["pin comment", "pinned comment"],
+    "评论关键词": ["comment search", "comment filter"],
+    "播放列表重命名": ["playlisteditor", "rename playlist"],
+    "播放列表简介": ["playlisteditor", "playlist description"],
+    "播放列表可见性": ["playlistprivacy", "playlist visibility"],
+    "播放列表详情": ["playlistdetail", "playlist detail"],
+    "随机播放": ["shuffle", "randomize"],
+    "反转排序": ["reverse", "reverse order"],
+    "批量选择": ["bulkremove", "bulk remove", "select all"],
+    "订阅流": ["subscriptionspage", "subscription feed"],
+    "最新最热最早": ["newest", "popular", "oldest", "sort"],
+    "创作者视频": ["studiopage", "creator studio", "uploads"],
+    "创作草稿": ["draftspage", "drafts", "uploadpage"],
+    "发现可见性": ["visibility", "discovery visibility"],
+    "复制为草稿": ["duplicatevideo", "duplicate video", "draft"],
+    "回收站": ["trashpage", "trash", "restore", "permanent delete"],
+    "定时发布": ["schedulevideo", "scheduled publish", "usescheduledpublish"],
+    "通知偏好": ["notificationpreferences", "notification preferences"],
+    "数据导出导入": ["backuppanel", "backup", "import export"],
+    "观看洞察": ["insightspage", "viewing insights", "analytics"],
+    "命令导航": ["commandpalette", "command palette", "navigation commands"],
+    # Atomic wording variants keep the expansion useful when product prose
+    # separates the noun and action (for example “复制已有视频…为草稿”).
+    "屏蔽": ["block", "blocked", "dismiss", "cardmenu"],
+    "倍速": ["speedcontrol", "speed control", "playbackrate"],
+    "书签": ["bookmarks", "bookmark", "timestamp"],
+    "章节": ["chapters", "chapter"],
+    "回复线程": ["replies", "reply thread"],
+    "复制已有视频": ["duplicatevideo", "duplicate video"],
+    "未来发布时间": ["schedulevideo", "scheduled publish", "usescheduledpublish"],
+    "应用内通知": ["notificationpreferences", "notificationspage", "notification preferences"],
+    "分类分布": ["insightspage", "insights", "category distribution"],
 }
 CONTEXT_ROLE_ALIASES = {
     "键盘快捷键": ["keyboard", "usekeyboard"],
@@ -99,6 +164,13 @@ CONTEXT_ROLE_ALIASES = {
     "顶部导航栏": ["header"],
     "模态框": ["modal"],
     "视频评论": ["comments"],
+    "上传时间筛选": ["filters", "select videos", "search page"],
+    "播放器键盘": ["player", "use player keyboard"],
+    "播放队列": ["queue panel", "card menu", "watch page"],
+    "播放列表详情": ["playlist detail", "playlists page"],
+    "创作草稿": ["drafts page", "upload page", "studio page"],
+    "未来发布时间": ["schedule video", "use scheduled publish", "studio page"],
+    "全局命令导航": ["command palette", "header", "use keyboard", "application"],
 }
 
 
@@ -349,7 +421,8 @@ class RepositoryCodeIndex:
 
         chunks_by_path: dict[str, list[dict]] = {}
         if self.vector_store:
-            for chunk in self.vector_store.search(index, requirement, k=SEMANTIC_CHUNK_CANDIDATES):
+            semantic_query = self._semantic_query_text(requirement)
+            for chunk in self.vector_store.search(index, semantic_query, k=SEMANTIC_CHUNK_CANDIDATES):
                 chunks_by_path.setdefault(chunk["path"], []).append(chunk)
             semantic_scores = {path: max(chunk["score"] for chunk in chunks) for path, chunks in chunks_by_path.items()}
         else:
@@ -402,11 +475,24 @@ class RepositoryCodeIndex:
         by_path = {item["path"]: {**item, "reasons": list(item.get("reasons", []))} for item in raw}
         raw_rank = {item["path"]: rank for rank, item in enumerate(raw, 1)}
         relation_scores: dict[str, float] = {}
+        intent_seeds = set(self._primary_files(
+            records, [item["path"] for item in raw], requirement,
+        )[:3])
 
         for seed_rank, item in enumerate(raw[:max(CONTEXT_DEPENDENCY_SEEDS, (limit or 0) * 2)], 1):
             seed = item["path"]
             record = records.get(seed, {})
-            for relation, weight in (("imports", 0.16), ("referenced_by", 0.12)):
+            # A file that directly matches the requested feature is a reliable
+            # graph anchor.  Its caller commonly contains the integration work
+            # (page/header/studio), while its imports contain collaborating
+            # selectors and helpers.  Generic raw candidates retain a much
+            # smaller expansion weight so they cannot flood the final context.
+            relation_weights = (
+                (("imports", 0.38), ("referenced_by", 0.52))
+                if seed in intent_seeds else
+                (("imports", 0.12), ("referenced_by", 0.10))
+            )
+            for relation, weight in relation_weights:
                 for related in record.get(relation, []):
                     if related not in records or related == seed:
                         continue
@@ -417,6 +503,22 @@ class RepositoryCodeIndex:
                     reason = f"由候选 {seed} 扩展的{label}"
                     if reason not in by_path[related]["reasons"]:
                         by_path[related]["reasons"].append(reason)
+                    # Follow callers for one additional hop.  This recovers
+                    # composition chains such as CommandPalette -> Header ->
+                    # Application without recursively expanding the graph.
+                    if seed in intent_seeds and relation == "referenced_by":
+                        for caller in records[related].get("referenced_by", []):
+                            if caller not in records or caller == seed:
+                                continue
+                            relation_scores[caller] = max(
+                                relation_scores.get(caller, 0.0), 0.32 / seed_rank,
+                            )
+                            by_path.setdefault(caller, {
+                                "path": caller, "score": 0.0, "reasons": [], "chunks": [],
+                            })
+                            caller_reason = f"由候选 {seed} 经 {related} 扩展的调用方"
+                            if caller_reason not in by_path[caller]["reasons"]:
+                                by_path[caller]["reasons"].append(caller_reason)
             stem = Path(seed).stem.lower().replace("index", "")
             for related in records:
                 if self._is_test(related) and ((stem and stem in related.lower()) or Path(seed).name.lower() in records[related].get("search_text", "")):
@@ -449,6 +551,12 @@ class RepositoryCodeIndex:
             role_score += 0.06 if overlap else 0.0
             role_score += min(0.03, self._lexical_role_bonus(path, requirement) * 0.01)
             role_score += self._context_role_bonus(path, records[path], requirement)
+            stem = Path(path).stem.lower()
+            if stem in {"app", "application", "index", "main"} and not any(
+                term in requirement.lower()
+                for term in ("应用", "装配", "入口", "路由", "全局", "app", "application", "route")
+            ):
+                role_score -= 0.12
             if self._is_test(path):
                 role_score += 0.3 if wants_tests else -0.08
             score = rank_score + relation_scores.get(path, 0.0) + role_score
@@ -458,7 +566,54 @@ class RepositoryCodeIndex:
                 reasons.append("文件路径或符号与需求目标角色匹配")
             reranked.append({**item, "score": score, "reasons": list(dict.fromkeys(reasons)), "context_role": role})
         result = sorted(reranked, key=lambda item: (-item["score"], raw_rank.get(item["path"], 10_000), item["path"]))
-        return result[:limit] if limit is not None else result
+        # Graph expansion may add highly useful callers, but it must not evict
+        # the best direct intent match from rank one.  This keeps MRR stable
+        # while the remaining slots cover integration dependencies.
+        top_path = raw[0]["path"]
+        top_terms = set(self._tokenize(Path(top_path).stem))
+        top_terms.update(
+            term for symbol in records[top_path].get("symbols", []) for term in self._tokenize(symbol)
+        )
+        specific_query_terms = {
+            term for term in self._lexical_query_terms(requirement)
+            if term not in GENERIC_ROLE_TERMS
+        }
+        top_stem = Path(top_path).stem.lower()
+        protected = top_path if (
+            top_path in intent_seeds
+            and (top_terms & specific_query_terms or top_stem in {"app", "application", "main"})
+        ) else None
+        if protected:
+            anchor = next(item for item in result if item["path"] == protected)
+            result = [anchor, *(item for item in result if item["path"] != protected)]
+        if limit is None:
+            return result
+        selected = result[:limit]
+        # Reserve most, but not all, of the budget for direct retrieval.  This
+        # prevents graph expansion from turning a successful Hit@K into a miss,
+        # while leaving room for callers/dependencies that complete multi-file
+        # requirements (2 direct + 1 graph at K=3; 3 direct + 2 graph at K=5).
+        direct_budget = min(
+            len(raw),
+            limit if limit <= 3 else max(1, math.ceil(limit * 0.6)),
+        )
+        direct_paths = [item["path"] for item in raw[:direct_budget]]
+        selected_paths = {item["path"] for item in selected}
+        for path in direct_paths:
+            if path in selected_paths:
+                continue
+            replacement = next(
+                (index for index in range(len(selected) - 1, -1, -1)
+                 if selected[index]["path"] not in direct_paths),
+                None,
+            )
+            if replacement is None:
+                continue
+            selected_paths.discard(selected[replacement]["path"])
+            selected[replacement] = next(item for item in result if item["path"] == path)
+            selected_paths.add(path)
+        result_order = {item["path"]: rank for rank, item in enumerate(result)}
+        return sorted(selected, key=lambda item: result_order[item["path"]])
 
     def _lexical_scores(
         self, records: dict[str, dict], requirement: str
@@ -589,7 +744,7 @@ class RepositoryCodeIndex:
             alias_terms = {term for alias in aliases for term in cls._tokenize(alias)}
             if file_terms & alias_terms:
                 # 这些映射只包含高精度复合意图，可以安全地压过“搜索/删除”等泛化邻居。
-                bonus = max(bonus, 0.34)
+                bonus = max(bonus, 0.6)
         return bonus
 
     def _semantic_scores(self, records: dict[str, dict], requirement: str) -> dict[str, float]:
@@ -617,6 +772,14 @@ class RepositoryCodeIndex:
             if phrase in lowered:
                 tokens.extend(aliases)
         return list(dict.fromkeys(tokens))
+
+    @classmethod
+    def _semantic_query_text(cls, requirement: str) -> str:
+        """Append matched code-domain aliases to the natural-language query."""
+        lowered = requirement.lower()
+        aliases = [alias for phrase, values in SEMANTIC_ALIASES.items()
+                   if phrase in lowered for alias in values]
+        return "\n".join([requirement, " ".join(dict.fromkeys(aliases))]) if aliases else requirement
 
     @staticmethod
     def _tokenize(value: str) -> list[str]:
@@ -712,7 +875,10 @@ class RepositoryCodeIndex:
     @staticmethod
     def _resolve_import(source: str, imported: str, records: dict[str, dict]) -> str | None:
         if imported.startswith("."):
-            base = (Path(source).parent / imported).as_posix()
+            # Repository paths and JS import specifiers are POSIX paths even on
+            # Windows.  Normalising ``..`` is required for sibling feature
+            # imports such as layout/Header -> ../search/SearchHistory.
+            base = posixpath.normpath(f"{Path(source).parent.as_posix()}/{imported}")
         else:
             base = imported.replace(".", "/")
         candidates = [

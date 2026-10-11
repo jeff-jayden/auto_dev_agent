@@ -71,6 +71,44 @@ def test_context_ranking_expands_dependency_and_prefers_definition_role():
     assert any("扩展的依赖" in reason for reason in ranked[0]["reasons"])
 
 
+def test_dependency_graph_normalizes_parent_directory_imports(tmp_path):
+    files = {
+        "src/features/layout/Header.js": (
+            "import SearchHistory from '../search/SearchHistory';\n"
+            "export default function Header() { return SearchHistory(); }"
+        ),
+        "src/features/search/SearchHistory.js": (
+            "export default function SearchHistory() { return null; }"
+        ),
+    }
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    engine = RepositoryCodeIndex()
+    index, _, _ = engine.build(tmp_path, list(files), "head")
+
+    assert index["files"]["src/features/layout/Header.js"]["imports"] == [
+        "src/features/search/SearchHistory.js"
+    ]
+    assert index["files"]["src/features/search/SearchHistory.js"]["referenced_by"] == [
+        "src/features/layout/Header.js"
+    ]
+
+    raw = [
+        {"path": "src/features/search/SearchHistory.js", "score": 1.0, "reasons": [], "chunks": []},
+        {"path": "src/features/layout/Header.js", "score": 0.5, "reasons": [], "chunks": []},
+    ]
+    ranked = engine.rank_context_files(
+        index, "记录搜索历史并支持清除", limit=2, ranked_hits=raw,
+    )
+    assert [item["path"] for item in ranked] == [
+        "src/features/search/SearchHistory.js",
+        "src/features/layout/Header.js",
+    ]
+
+
 def test_context_ranking_preserves_specific_top_result_over_generic_action():
     engine = RepositoryCodeIndex()
     records = {
@@ -121,6 +159,40 @@ def test_context_ranking_promotes_high_precision_compound_role():
     )
 
     assert ranked[0]["path"] == "src/features/watch/Recommendations.js"
+
+
+def test_context_ranking_reserves_direct_results_while_expanding_graph():
+    engine = RepositoryCodeIndex()
+    records = {
+        "src/Feature.js": {
+            "symbols": ["Feature"], "imports": [], "referenced_by": ["src/Page.js"],
+            "search_text": "feature",
+        },
+        "src/Second.js": {
+            "symbols": ["Second"], "imports": [], "referenced_by": [], "search_text": "second",
+        },
+        "src/Third.js": {
+            "symbols": ["Third"], "imports": [], "referenced_by": [], "search_text": "third",
+        },
+        "src/Page.js": {
+            "symbols": ["Page"], "imports": ["src/Feature.js"], "referenced_by": [],
+            "search_text": "page feature",
+        },
+    }
+    raw = [
+        {"path": "src/Feature.js", "score": 1.0, "reasons": [], "chunks": []},
+        {"path": "src/Second.js", "score": 0.9, "reasons": [], "chunks": []},
+        {"path": "src/Third.js", "score": 0.8, "reasons": [], "chunks": []},
+    ]
+
+    ranked = engine.rank_context_files(
+        {"files": records}, "修改 Feature 功能", limit=4, ranked_hits=raw,
+    )
+
+    paths = [item["path"] for item in ranked]
+    assert "src/Feature.js" in paths
+    assert "src/Second.js" in paths
+    assert "src/Page.js" in paths
 
 
 def test_generic_plan_language_does_not_expand_write_scope():

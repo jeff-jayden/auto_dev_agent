@@ -240,6 +240,13 @@ class RepositoryAnalysisTests(unittest.TestCase):
         self.assertEqual(ranked[0]["path"], "src/features/studio/StudioPage.js")
         self.assertNotIn("src/reportWebVitals.js", [item["path"] for item in ranked])
 
+    def test_semantic_query_adds_code_aliases_for_product_language(self):
+        query = RepositoryCodeIndex._semantic_query_text("实现本地视频定时发布")
+
+        self.assertIn("实现本地视频定时发布", query)
+        self.assertIn("schedulevideo", query)
+        self.assertIn("usescheduledpublish", query)
+
     def test_code_index_is_cached_and_incrementally_updated_by_git_head(self):
         analyzer = RepositoryAnalyzer(self.root / "indexes")
 
