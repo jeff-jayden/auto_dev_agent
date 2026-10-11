@@ -5,24 +5,51 @@ let ragDirty = false;
 const ragEl = (id) => document.getElementById(id);
 const ragStates = {pending: "待确认", confirmed: "已确认", excluded: "已排除"};
 const ragLabels = {unreviewed: "未审核", required: "必要文件", supporting: "辅助上下文", irrelevant: "无关 / 新增文件（开发前不可检索）"};
+const ragManualDataset = "manual";
+
+function selectedRagDataset() {
+  return ragEl("rag-dataset").value;
+}
+
+function applyRagDatasetDefaults() {
+  const datasetId = selectedRagDataset();
+  const metadata = (ragData.builtin_datasets || []).find((item) => item.id === datasetId);
+  if (metadata) {
+    ragEl("rag-eval-split").value = "test";
+    ragEl("rag-k").value = metadata.recommended_k;
+  } else if (datasetId === ragManualDataset) {
+    ragEl("rag-eval-split").value = "dev";
+  }
+}
+
+function renderSelectedRagReport() {
+  const report = ragData.latest_run;
+  renderRagReport(report && report.dataset_id === selectedRagDataset() ? report : null);
+}
 
 async function loadRagDataset() {
   if (ragDirty && !confirm("刷新会放弃尚未保存的标注，继续吗？")) return;
   const [data, repositories] = await Promise.all([api("/api/rag/dataset"), api("/api/repositories")]);
   ragData = data;
+  const selectedDataset = selectedRagDataset();
+  ragEl("rag-dataset").innerHTML = (data.builtin_datasets || []).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("") + '<option value="manual">人工标注 / 历史需求</option>';
+  ragEl("rag-dataset").value = [...ragEl("rag-dataset").options].some((option) => option.value === selectedDataset) ? selectedDataset : "cfe-unit-r02-r49";
   const selected = ragEl("rag-repository").value;
   ragEl("rag-repository").innerHTML = '<option value="">全部仓库</option>' + repositories.map((repo) => `<option value="${escapeHtml(repo.id)}">${escapeHtml(repo.name)}</option>`).join("");
   ragEl("rag-repository").value = selected;
-  ragEl("rag-counts").textContent = `待确认 ${data.counts.pending} · 已确认 ${data.counts.confirmed} · 已排除 ${data.counts.excluded}`;
   renderRagList();
   if (ragSelected) renderRagEditor(ragSelected);
-  renderRagReport(data.latest_run);
+  renderSelectedRagReport();
 }
 
 function renderRagList() {
   const filter = ragEl("rag-filter").value;
   const repo = ragEl("rag-repository").value;
-  const cases = ragData.cases.filter((item) => (filter === "all" || item.state === filter) && (!repo || item.repository_id === repo));
+  const datasetId = selectedRagDataset();
+  const datasetCases = ragData.cases.filter((item) => item.dataset_id === datasetId && (!repo || item.repository_id === repo));
+  const cases = datasetCases.filter((item) => filter === "all" || item.state === filter);
+  const counts = Object.fromEntries(["pending", "confirmed", "excluded"].map((state) => [state, datasetCases.filter((item) => item.state === state).length]));
+  ragEl("rag-counts").textContent = `当前测试集：待确认 ${counts.pending} · 已确认 ${counts.confirmed} · 已排除 ${counts.excluded}`;
   ragEl("rag-case-list").innerHTML = cases.map((item) => `<button type="button" class="rag-case secondary ${item.id === ragSelected ? "selected" : ""}" data-case="${escapeHtml(item.id)}"><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.query)}</span><small>${ragStates[item.state]} · ${escapeHtml(item.repository_name)} · ${item.split === "test" ? "测试集" : "开发集"}</small></button>`).join("") || '<p>暂无样本。可以先提取候选，或切换筛选条件。</p>';
   ragEl("rag-case-list").querySelectorAll("[data-case]").forEach((button) => button.addEventListener("click", () => {
     if (ragDirty && ragSelected !== button.dataset.case && !confirm("切换样本会放弃尚未保存的标注，继续吗？")) return;
@@ -79,7 +106,7 @@ function renderRagReport(report) {
   const contextTable = metricTable("Agent 最终上下文 Top K（候选扩大 + 依赖扩展 + 文件角色重排）", report.baseline_context, report.hybrid_context, report.context_delta);
   const timing = report.baseline ? `<p>原始检索平均耗时：基线 ${report.average_query_ms.baseline} ms → RAG ${report.average_query_ms.hybrid} ms（不含首次建库）。${report.average_final_context_ms ? ` 最终上下文：基线 ${report.average_final_context_ms.baseline} ms → RAG ${report.average_final_context_ms.hybrid} ms。` : ""}</p>` : "";
   const cases = report.cases.map((item) => `<div class="rag-case-detail"><b>${escapeHtml(item.title)}</b><p>基线 ${escapeHtml(item.base_sha.slice(0, 12))} · 标注 v${item.annotation_revision}</p><p>标准文件：${escapeHtml(item.expected_files.join("，"))}</p><p>原始 ${baselineShort}：${escapeHtml(item.baseline_files.join("，"))}</p><p>原始 RAG：${escapeHtml(item.hybrid_files.join("，"))}</p>${item.baseline_context_files ? `<p>最终 ${baselineShort}：${escapeHtml(item.baseline_context_files.join("，"))}</p><p>最终 RAG：${escapeHtml(item.hybrid_context_files.join("，"))}</p>` : ""}</div>`).join("");
-  ragEl("rag-report").innerHTML = `<p>${escapeHtml(new Date(report.created_at).toLocaleString())} · ${report.split === "test" ? "测试集" : "开发集"} · Top ${report.k} · 成功评测 ${report.evaluated_count}/${report.requested_count} · ${escapeHtml(report.status)} · 模型 ${escapeHtml(report.embedding_model || "未就绪")}</p>${rawTable || "<p>没有成功评测的样本，未生成分数。</p>"}${contextTable}${timing}<p>${escapeHtml(report.limitations)}</p>${report.errors.map((error) => `<p class="rag-warning">未计分：${escapeHtml(error.title)} — ${escapeHtml(error.reason)}</p>`).join("")}<details><summary>查看逐条召回及标注版本</summary>${cases}</details>`;
+  ragEl("rag-report").innerHTML = `<p>${escapeHtml(new Date(report.created_at).toLocaleString())} · ${escapeHtml(report.dataset_label || "历史评测")} · ${report.split === "test" ? "测试集" : "开发集"} · Top ${report.k} · 成功评测 ${report.evaluated_count}/${report.requested_count} · ${escapeHtml(report.status)} · 模型 ${escapeHtml(report.embedding_model || "未就绪")}</p>${rawTable || "<p>没有成功评测的样本，未生成分数。</p>"}${contextTable}${timing}<p>${escapeHtml(report.limitations)}</p>${report.errors.map((error) => `<p class="rag-warning">未计分：${escapeHtml(error.title)} — ${escapeHtml(error.reason)}</p>`).join("")}<details><summary>查看逐条召回及标注版本</summary>${cases}</details>`;
 }
 
 async function ragBusy(button, operation) {
@@ -92,6 +119,13 @@ async function ragBusy(button, operation) {
 
 ragEl("rag-filter").addEventListener("change", renderRagList);
 ragEl("rag-repository").addEventListener("change", renderRagList);
+ragEl("rag-dataset").addEventListener("change", () => {
+  ragSelected = null;
+  applyRagDatasetDefaults();
+  renderRagList();
+  renderSelectedRagReport();
+  ragEl("rag-editor").innerHTML = "<p>选择当前测试集中的样本开始标注。</p>";
+});
 ragEl("rag-refresh").addEventListener("click", (event) => ragBusy(event.currentTarget, loadRagDataset));
 ragEl("rag-import").addEventListener("click", (event) => ragBusy(event.currentTarget, async () => {
   const data = await api("/api/rag/dataset/import", {method: "POST", body: JSON.stringify({repository_id: ragEl("rag-repository").value || null, merged_only: ragEl("rag-source").value === "merged", limit: Number(ragEl("rag-limit").value)})});
@@ -99,19 +133,22 @@ ragEl("rag-import").addEventListener("click", (event) => ragBusy(event.currentTa
   await loadRagDataset();
 }));
 ragEl("rag-import-cfe-unit").addEventListener("click", (event) => ragBusy(event.currentTarget, async () => {
-  const data = await api("/api/rag/dataset/import-builtin", {method: "POST", body: JSON.stringify({repository_id: ragEl("rag-repository").value || null})});
-  ragEl("rag-import-result").innerHTML = `<p>cfe-unit 测试集：新增 ${data.created.length} · 已存在 ${data.skipped.length} · 失败 ${data.errors.length}。${escapeHtml(data.message)}</p>${data.errors.map((error) => `<p class="rag-warning">${escapeHtml(error.requirement_id || "样本")}：${escapeHtml(error.reason)}</p>`).join("")}`;
+  const datasetId = selectedRagDataset();
+  if (datasetId === ragManualDataset) throw new Error("人工标注数据请使用“提取候选”，或选择一个 cfe-unit 内置测试集");
+  const data = await api("/api/rag/dataset/import-builtin", {method: "POST", body: JSON.stringify({repository_id: ragEl("rag-repository").value || null, dataset_id: datasetId})});
+  ragEl("rag-import-result").innerHTML = `<p>${escapeHtml(data.dataset_label)}：新增 ${data.created.length} · 已存在 ${data.skipped.length} · 失败 ${data.errors.length}。${escapeHtml(data.message)}</p>${data.errors.map((error) => `<p class="rag-warning">${escapeHtml(error.requirement_id || "样本")}：${escapeHtml(error.reason)}</p>`).join("")}`;
   ragDirty = false;
   await loadRagDataset();
   ragEl("rag-repository").value = data.repository_id;
   ragEl("rag-filter").value = "confirmed";
   ragEl("rag-eval-split").value = "test";
+  ragEl("rag-k").value = data.recommended_k;
   renderRagList();
 }));
 ragEl("rag-evaluate").addEventListener("click", (event) => ragBusy(event.currentTarget, async () => {
   ragEl("rag-report").innerHTML = "<p>正在导出开发前快照并运行评测，首次生成 Embedding 可能需要一段时间…</p>";
   try {
-    const report = await api("/api/rag/dataset/evaluate", {method: "POST", body: JSON.stringify({split: ragEl("rag-eval-split").value, k: Number(ragEl("rag-k").value), repository_id: ragEl("rag-repository").value || null})});
+    const report = await api("/api/rag/dataset/evaluate", {method: "POST", body: JSON.stringify({split: ragEl("rag-eval-split").value, k: Number(ragEl("rag-k").value), repository_id: ragEl("rag-repository").value || null, dataset_id: selectedRagDataset()})});
     ragData.latest_run = report;
     renderRagReport(report);
   } catch (error) { renderRagReport(ragData.latest_run); throw error; }

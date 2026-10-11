@@ -9,7 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from domain.models import Repository, RepositoryAnalysis, Task, TaskStatus
-from evaluation.dataset import (AnnotationRequest, BuiltinDatasetImportRequest, DatasetConflict,
+from evaluation.dataset import (ENRICHMENT_DATASET_ID, LEGACY_DATASET_ID, MANUAL_DATASET_ID,
+                                AnnotationRequest, BuiltinDatasetImportRequest, DatasetConflict,
                                 DatasetEvaluationRequest, DatasetImportRequest, RagDatasetService)
 from infrastructure.store import SQLiteTaskStore
 from scm.github import GitHubClient
@@ -96,12 +97,41 @@ def test_builtin_dataset_imports_confirmed_test_cases_and_is_idempotent(dataset,
                     if case["source_task_id"].startswith("builtin:"))
     assert imported["state"] == "confirmed"
     assert imported["split"] == "test"
+    assert imported["dataset_id"] == LEGACY_DATASET_ID
+    assert result["dataset_label"] == "旧测试集 R02–R49（48 条）"
     assert imported["base_sha"] == git(repo, "rev-parse", "HEAD")
     assert {item["path"]: item["label"] for item in imported["candidates"]} == {
         "app.py": "required", "helper.py": "irrelevant"
     }
     repeated = service.import_builtin(BuiltinDatasetImportRequest(repository_id="repo"))
     assert not repeated["created"] and len(repeated["skipped"]) == 1
+
+
+def test_overview_exposes_dataset_options_and_normalizes_existing_cases(dataset):
+    service, _, _, _ = dataset
+    overview = service.overview()
+    assert [item["id"] for item in overview["builtin_datasets"]] == [
+        LEGACY_DATASET_ID, ENRICHMENT_DATASET_ID
+    ]
+    assert overview["cases"][0]["dataset_id"] == MANUAL_DATASET_ID
+
+
+def test_overview_recovers_dataset_id_for_legacy_reports(dataset):
+    service, _, _, _ = dataset
+    report = {"id": "old-run", "dataset_snapshot": [{
+        "source_task_id": "builtin:cfe-unit-youtube-commit-file-recall-v1:R02:repo"
+    }]}
+    with patch.object(service.store, "latest_rag_dataset_run", return_value=report):
+        normalized = service.overview()["latest_run"]
+    assert normalized["dataset_id"] == LEGACY_DATASET_ID
+    assert normalized["dataset_label"] == "旧测试集 R02–R49（48 条）"
+
+
+def test_evaluation_filters_selected_dataset(dataset):
+    service, case, _, _ = dataset
+    service.annotate(case["id"], annotation(case))
+    with pytest.raises(ValueError, match="所选测试集"):
+        service.evaluate(DatasetEvaluationRequest(dataset_id=LEGACY_DATASET_ID))
 
 
 def test_pending_never_evaluated(dataset):

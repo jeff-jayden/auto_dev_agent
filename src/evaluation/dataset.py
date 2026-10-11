@@ -21,6 +21,25 @@ from code_intelligence.indexer import RepositoryCodeIndex, SOURCE_SUFFIXES
 from evaluation.retrieval import RetrievalCase, RetrievalEvaluator, evaluate_repository
 
 
+LEGACY_DATASET_ID = "cfe-unit-r02-r49"
+ENRICHMENT_DATASET_ID = "cfe-unit-r51-r100"
+MANUAL_DATASET_ID = "manual"
+BUILTIN_DATASETS = {
+    LEGACY_DATASET_ID: {
+        "label": "旧测试集 R02–R49（48 条）",
+        "filename": "cfe_unit_commit_rag_cases.json",
+        "case_count": 48,
+        "recommended_k": 3,
+    },
+    ENRICHMENT_DATASET_ID: {
+        "label": "新测试集 R51–R100（50 条）",
+        "filename": "cfe_unit_enrichment_rag_cases.json",
+        "case_count": 50,
+        "recommended_k": 5,
+    },
+}
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -33,6 +52,7 @@ class DatasetImportRequest(BaseModel):
 
 class BuiltinDatasetImportRequest(BaseModel):
     repository_id: str | None = None
+    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100"] = LEGACY_DATASET_ID
 
 
 class AnnotationRequest(BaseModel):
@@ -49,6 +69,7 @@ class DatasetEvaluationRequest(BaseModel):
     split: Literal["dev", "test"] = "dev"
     k: int = Field(default=3, ge=1, le=20)
     repository_id: str | None = None
+    dataset_id: Literal["cfe-unit-r02-r49", "cfe-unit-r51-r100", "manual"] | None = None
 
 
 class DatasetConflict(ValueError):
@@ -65,6 +86,12 @@ class RagDatasetService:
         self.builtin_dataset_path = builtin_dataset_path or (
             Path(__file__).resolve().parent / "datasets" / "cfe_unit_commit_rag_cases.json"
         )
+        self.builtin_dataset_paths = {
+            LEGACY_DATASET_ID: self.builtin_dataset_path,
+            ENRICHMENT_DATASET_ID: (
+                Path(__file__).resolve().parent / "datasets" / "cfe_unit_enrichment_rag_cases.json"
+            ),
+        }
         self._evaluation_lock = threading.Lock()
 
     @staticmethod
@@ -87,11 +114,39 @@ class RagDatasetService:
         value = PurePosixPath(path)
         return bool(path) and not any(ord(char) < 32 for char in path) and not value.is_absolute() and ".." not in value.parts and "\\" not in path and ":" not in path and not any(part.startswith(".env") or part == ".git" for part in value.parts)
 
+    @staticmethod
+    def _case_dataset_id(case: dict) -> str:
+        if case.get("dataset_id"):
+            return case["dataset_id"]
+        source_id = str(case.get("source_task_id", ""))
+        if "cfe-unit-youtube-commit-file-recall-v1" in source_id:
+            return LEGACY_DATASET_ID
+        if "cfe-unit-youtube-enrichment-file-recall-v2" in source_id:
+            return ENRICHMENT_DATASET_ID
+        return MANUAL_DATASET_ID
+
+    @staticmethod
+    def _dataset_options() -> list[dict]:
+        return [{"id": dataset_id, **metadata} for dataset_id, metadata in BUILTIN_DATASETS.items()]
+
+    def _normalize_report_dataset(self, report: dict | None) -> dict | None:
+        if not report or report.get("dataset_id"):
+            return report
+        dataset_ids = {self._case_dataset_id(case) for case in report.get("dataset_snapshot", [])}
+        if len(dataset_ids) != 1:
+            return report
+        dataset_id = dataset_ids.pop()
+        return {**report, "dataset_id": dataset_id,
+                "dataset_label": (BUILTIN_DATASETS[dataset_id]["label"]
+                                  if dataset_id in BUILTIN_DATASETS else "人工标注 / 历史需求")}
+
     def overview(self) -> dict:
-        cases = self.store.list_rag_cases()
+        cases = [{**case, "dataset_id": self._case_dataset_id(case)}
+                 for case in self.store.list_rag_cases()]
         return {"cases": cases, "counts": {state: sum(case["state"] == state for case in cases)
                                           for state in ("pending", "confirmed", "excluded")},
-                "latest_run": self.store.latest_rag_dataset_run()}
+                "builtin_datasets": self._dataset_options(),
+                "latest_run": self._normalize_report_dataset(self.store.latest_rag_dataset_run())}
 
     @staticmethod
     def _indexable(path: str) -> bool:
@@ -124,8 +179,10 @@ class RagDatasetService:
 
     def import_builtin(self, request: BuiltinDatasetImportRequest) -> dict:
         """将随项目提供的 cfe-unit 提交数据集导入人工标注表。"""
+        dataset_path = (self.builtin_dataset_path if request.dataset_id == LEGACY_DATASET_ID
+                        else self.builtin_dataset_paths[request.dataset_id])
         try:
-            manifest = json.loads(self.builtin_dataset_path.read_text(encoding="utf-8"))
+            manifest = json.loads(dataset_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError("内置 cfe-unit RAG 数据集不可用") from error
 
@@ -177,6 +234,7 @@ class RagDatasetService:
                     "title": f"{requirement_id} {query}",
                     "original_requirement": query,
                     "query": query,
+                    "dataset_id": request.dataset_id,
                     "repository_id": repository.id,
                     "repository_name": repository.name,
                     "base_sha": full_sha,
@@ -204,7 +262,9 @@ class RagDatasetService:
                 errors.append({"requirement_id": requirement_id, "title": query,
                                "reason": str(error)[:600]})
         return {"created": created, "skipped": skipped, "errors": errors,
-                "repository_id": repository.id,
+                "repository_id": repository.id, "dataset_id": request.dataset_id,
+                "dataset_label": BUILTIN_DATASETS[request.dataset_id]["label"],
+                "recommended_k": BUILTIN_DATASETS[request.dataset_id]["recommended_k"],
                 "message": "内置样本已确认并归入测试集；重复导入不会覆盖页面中的现有标注"}
 
     def _candidate(self, task, merged_only: bool) -> dict:
@@ -256,7 +316,8 @@ class RagDatasetService:
         timestamp = now()
         return {"id": hashlib.sha256(task.id.encode()).hexdigest()[:24], "source_task_id": task.id,
                 "group_id": task.metadata.get("followup_of") or task.id, "title": task.title, "original_requirement": task.requirement,
-                "query": task.requirement, "repository_id": repository.id, "repository_name": repository.name,
+                "query": task.requirement, "dataset_id": MANUAL_DATASET_ID,
+                "repository_id": repository.id, "repository_name": repository.name,
                 "base_sha": full_sha, "pr_url": pull.url if pull else None,
                 "pr_number": pull.number if pull else None, "sources": sources or ["local_history"],
                 "warnings": warnings, "candidates": candidates[:200], "state": "pending", "split": "dev",
@@ -316,9 +377,10 @@ class RagDatasetService:
     def evaluate(self, request: DatasetEvaluationRequest) -> dict:
         cases = [case for case in self.store.list_rag_cases()
                  if case["state"] == "confirmed" and case["split"] == request.split
-                 and (not request.repository_id or case["repository_id"] == request.repository_id)]
+                 and (not request.repository_id or case["repository_id"] == request.repository_id)
+                 and (not request.dataset_id or self._case_dataset_id(case) == request.dataset_id)]
         if not cases:
-            raise ValueError("所选分组没有人工确认的样本，请先完成标注")
+            raise ValueError("所选测试集和分组没有人工确认的样本，请先导入或完成标注")
         if not self._evaluation_lock.acquire(blocking=False):
             raise DatasetConflict("已有数据集评测正在执行，请等待完成")
         try:
@@ -332,6 +394,10 @@ class RagDatasetService:
         latencies = {"baseline": [], "hybrid": []}
         context_latencies = {"baseline": [], "hybrid": []}
         report = {"id": uuid4().hex, "created_at": now(), "split": request.split, "k": request.k,
+                  "dataset_id": request.dataset_id,
+                  "dataset_label": (BUILTIN_DATASETS[request.dataset_id]["label"]
+                                    if request.dataset_id in BUILTIN_DATASETS else "人工标注 / 历史需求"
+                                    if request.dataset_id == MANUAL_DATASET_ID else "全部数据集"),
                   "requested_count": len(cases), "dataset_snapshot": cases,
                   "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1",
                   "context_strategy": "expanded_dependency_role_rerank_v1"}

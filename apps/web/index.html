@@ -61,11 +61,11 @@
           <section id="rag-view" class="workspace-view view-scroll hidden">
             <section class="panel">
               <h2>从真实需求建立评测集</h2><p>PR 改动文件只是候选，不是标准答案。请人工确认必要、辅助与无关文件；评测只读取开发前 Git 快照，不修改代码或推送 PR。</p>
-              <div class="rag-toolbar"><label>仓库<select id="rag-repository"><option value="">全部仓库</option></select></label><label>来源<select id="rag-source"><option value="merged">已合入 PR</option><option value="history">所有历史需求</option></select></label><label>每次最多<input id="rag-limit" type="number" min="1" max="100" value="20"></label><button id="rag-import" type="button">提取候选</button><button id="rag-import-cfe-unit" type="button" class="secondary">导入 cfe-unit 48 条测试集</button><button id="rag-refresh" type="button" class="secondary">刷新</button></div>
+              <div class="rag-toolbar"><label>仓库<select id="rag-repository"><option value="">全部仓库</option></select></label><label>测试集<select id="rag-dataset"><option value="cfe-unit-r02-r49">旧测试集 R02–R49（48 条）</option><option value="cfe-unit-r51-r100">新测试集 R51–R100（50 条）</option><option value="manual">人工标注 / 历史需求</option></select></label><label>来源<select id="rag-source"><option value="merged">已合入 PR</option><option value="history">所有历史需求</option></select></label><label>每次最多<input id="rag-limit" type="number" min="1" max="100" value="20"></label><button id="rag-import" type="button">提取候选</button><button id="rag-import-cfe-unit" type="button" class="secondary">导入所选测试集</button><button id="rag-refresh" type="button" class="secondary">刷新</button></div>
               <p id="rag-counts" role="status"></p><div id="rag-import-result"></div>
             </section>
             <div class="rag-label-layout"><aside class="panel"><h2>人工标注</h2><label>筛选<select id="rag-filter"><option value="pending">待确认</option><option value="confirmed">已确认</option><option value="excluded">已排除</option><option value="all">全部</option></select></label><div id="rag-case-list"></div></aside><section class="panel" id="rag-editor"><p>提取候选后，选择样本开始标注。</p></section></div>
-            <section class="panel"><h2>检索 A/B 评测</h2><p>同时展示原始召回，以及统一经过候选扩大、依赖扩展和文件角色重排后的 Agent 最终上下文。开发集用于调参，测试集留作最终验收；只统计已确认的样本。</p><div class="rag-toolbar"><label>分组<select id="rag-eval-split"><option value="dev">开发集</option><option value="test">测试集</option></select></label><label>Top K<input id="rag-k" type="number" min="1" max="20" value="3"></label><button type="button" id="rag-evaluate">评测已确认样本</button></div><div id="rag-report"><p>尚未运行人工标注数据集评测。</p></div></section>
+            <section class="panel"><h2>检索 A/B 评测</h2><p>上方“测试集”选择同时控制样本列表、导入和评测，避免新旧样本混合计分。内置测试集会自动使用测试集分组与建议的 Top K。</p><div class="rag-toolbar"><label>分组<select id="rag-eval-split"><option value="dev">开发集</option><option value="test" selected>测试集</option></select></label><label>Top K<input id="rag-k" type="number" min="1" max="20" value="3"></label><button type="button" id="rag-evaluate">评测所选测试集</button></div><div id="rag-report"><p>尚未运行人工标注数据集评测。</p></div></section>
           </section>
 
           <section id="empty-state" class="workspace-view requirement-layout">
@@ -153,7 +153,7 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
-    <script src="/assets/rag.js?v=3"></script>
+    <script src="/assets/rag.js?v=4"></script>
     <script src="/assets/app.js?v=57"></script>
   </body>
 </html>
