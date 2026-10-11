@@ -331,7 +331,7 @@ class RagDatasetService:
         rows, details, errors, latencies = [], [], [], {"baseline": [], "hybrid": []}
         report = {"id": uuid4().hex, "created_at": now(), "split": request.split, "k": request.k,
                   "requested_count": len(cases), "dataset_snapshot": cases,
-                  "baseline_strategy": "legacy_hash_hybrid", "hybrid_strategy": "embedding_chroma_rrf_v1"}
+                  "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1"}
         groups = {}
         for case in cases:
             groups.setdefault((case["repository_id"], case["base_sha"]), []).append(case)

@@ -462,7 +462,7 @@ python -m pytest -q
 1. 若要直接验证文件召回，点击 **导入 cfe-unit 48 条测试集**。页面会自动匹配包含固定快照的已注册仓库，把样本设为“已确认 / 测试集”；`src/reportWebVitals.js` 与 `src/setupTests.js` 不属于任何核心答案，且不在固定快照中。也可以选择仓库，提取“已合入 PR”或“所有历史需求”的候选文件。重复导入不会覆盖已有标注。
 2. 逐条确认需求，把候选标成 **必要 / 辅助 / 无关**；可从开发前基线补充漏掉的文件。保存草稿不参与评测，必须人工确认且至少有一个必要文件。新建文件在开发前不存在，不能作为召回答案。
 3. 将样本分为开发集（调参）与测试集（保留验收），点击“评测已确认样本”。同仓库完全相同的需求、带 `followup_of` 关联的后续任务不允许跨组重复；近似需求及未关联的重复任务仍需人工放在同组，避免泄漏。
-4. 对同一需求、同一开发前 Git 快照、同一 Top K，对比旧混合检索与 Embedding + Chroma 检索，展示 Recall@K、必要文件 Recall@K、Precision@K、MRR、Hit@K、查询耗时和逐条召回。
+4. 对同一需求、同一开发前 Git 快照、同一 Top K，对比字段化 BM25F + 本地语义基线与 Embedding + Chroma 检索，展示 Recall@K、必要文件 Recall@K、Precision@K、MRR、Hit@K、查询耗时和逐条召回。
 
 基线从任务保存的 `repository_analysis.head_sha` 获取，不以当前 HEAD 或合入后 PR 的 base.sha 代替。评测通过 `git archive` 导出临时快照，不 checkout/reset 工作仓库；缺少历史基线的样本会明确报错。远端 PR 文件只是候选，不能自动当标准答案。GitHub 未配置时会提示仅有本地历史来源。
 

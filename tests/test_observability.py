@@ -62,12 +62,13 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertEqual(comparison.case_count, 6)
         self.assertEqual(comparison.k, 3)
-        self.assertGreater(
+        self.assertEqual(comparison.baseline.recall_at_k, 100.0)
+        self.assertGreaterEqual(
             comparison.hybrid.recall_at_k, comparison.baseline.recall_at_k
         )
-        self.assertGreater(comparison.hybrid.mrr, comparison.baseline.mrr)
-        self.assertGreater(comparison.hybrid.hit_at_k, comparison.baseline.hit_at_k)
-        self.assertEqual(comparison.delta["recall_at_k"], 66.67)
+        self.assertGreaterEqual(comparison.hybrid.mrr, comparison.baseline.mrr)
+        self.assertGreaterEqual(comparison.hybrid.hit_at_k, comparison.baseline.hit_at_k)
+        self.assertEqual(comparison.delta["recall_at_k"], 0.0)
         self.assertTrue(all(case.expected_files for case in comparison.cases))
 
 

@@ -19,9 +19,16 @@ from domain.models import CodeEvidence, ContextFile, RepositoryContextPack
 from code_intelligence.vector_store import CodeVectorStore, code_chunks
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss"}
 TEST_MARKERS = ("test", "spec", "__tests__")
+LEXICAL_FIELD_WEIGHTS = {"path": 8.0, "symbols": 6.0, "imports": 3.0, "body": 1.0}
+LEXICAL_MIN_SCORE = 1.5
+QUERY_STOP_TERMS = {
+    "一个", "一些", "以及", "进行", "功能", "实现", "增加", "新增", "修改", "支持",
+    "提供", "完成", "正确", "统一", "页面", "组件", "文件",
+    "the", "and", "with", "from", "into", "page", "view", "screen", "component", "file", "data",
+}
 SEMANTIC_ALIASES = {
     "身份": ["auth", "authentication", "identity", "session", "credential"],
     "校验": ["validate", "verify", "check", "guard"],
@@ -36,6 +43,25 @@ SEMANTIC_ALIASES = {
     "缓存": ["cache", "memo", "redis"],
     "弹窗": ["modal", "dialog", "alert", "popup"],
     "历史": ["history", "audit", "timeline", "record"],
+    "页面": ["page", "view", "screen"],
+    "键盘快捷键": ["keyboard", "shortcut", "hotkey", "keydown", "keyup"],
+    "键盘": ["keyboard", "keydown", "keyup", "key"],
+    "快捷键": ["shortcut", "hotkey", "keydown"],
+    "聚焦": ["focus", "activeelement"],
+    "搜索": ["search", "query", "filter"],
+    "返回": ["back", "navigate", "history"],
+    "上传": ["upload", "publish", "file"],
+    "错误边界": ["error", "boundary", "fallback", "recover"],
+    "空状态": ["empty", "placeholder", "nothing", "noresults"],
+    "内容目录": ["catalog", "dataset", "fixture", "videos", "channels"],
+    "目录": ["catalog", "registry", "index"],
+    "频道": ["channel", "subscription"],
+    "视频": ["video", "player", "watch"],
+    "工作台": ["studio", "dashboard", "workspace"],
+    "全局状态": ["store", "context", "provider", "state"],
+    "路由": ["route", "router", "navigate", "pathname"],
+    "播放列表": ["playlist", "collection"],
+    "稍后观看": ["watchlater", "watch", "later"],
 }
 
 
@@ -265,9 +291,9 @@ class RepositoryCodeIndex:
         *,
         strategy: str = "hybrid",
     ) -> list[dict]:
-        """Rank indexed files while keeping the legacy scorer as an A/B baseline."""
+        """Rank indexed files with fielded lexical retrieval and optional semantic fusion."""
         records: dict[str, dict] = index.get("files", {})
-        lexical_scores, lexical_reasons = self._legacy_lexical_scores(records, requirement)
+        lexical_scores, lexical_reasons = self._lexical_scores(records, requirement)
         if strategy == "lexical":
             return [
                 {"path": path, "score": float(lexical_scores[path]), "reasons": lexical_reasons[path]}
@@ -309,32 +335,119 @@ class RepositoryCodeIndex:
             hits.append({"path": path, "score": fused, "reasons": reasons, "chunks": chunks_by_path.get(path, [])})
         return sorted(hits, key=lambda item: (-item["score"], item["path"]))
 
-    def _legacy_lexical_scores(
+    def _lexical_scores(
         self, records: dict[str, dict], requirement: str
-    ) -> tuple[dict[str, int], dict[str, list[str]]]:
-        terms = self._requirement_terms(requirement)
-        scores: dict[str, int] = {}
+    ) -> tuple[dict[str, float], dict[str, list[str]]]:
+        """字段化 BM25：精确路径/符号优先，正文命中降权，并过滤弱候选。"""
+        query_terms = self._lexical_query_terms(requirement)
+        if not query_terms:
+            return {}, {}
+        documents = {path: self._lexical_fields(path, record) for path, record in records.items()}
+        field_lengths = {
+            field: [sum(document[field].values()) for document in documents.values()]
+            for field in LEXICAL_FIELD_WEIGHTS
+        }
+        average_lengths = {
+            field: (sum(lengths) / len(lengths) if lengths else 1.0)
+            for field, lengths in field_lengths.items()
+        }
+        document_frequency = {
+            term: sum(any(term in document[field] for field in LEXICAL_FIELD_WEIGHTS)
+                      for document in documents.values())
+            for term in query_terms
+        }
+        total_documents = max(1, len(documents))
+        scores: dict[str, float] = {}
         reasons: dict[str, list[str]] = {}
-        for path, record in records.items():
-            score = 0
-            matched = [term for term in terms if term in record.get("search_text", "")]
-            if matched:
-                score += min(20, len(matched) * 5)
-                reasons.setdefault(path, []).append("匹配需求关键词：" + ", ".join(matched[:5]))
-            symbol_matches = [
-                symbol for symbol in record.get("symbols", [])
-                if any(term in symbol.lower() for term in terms)
-            ]
-            if symbol_matches:
-                score += min(15, len(symbol_matches) * 5)
-                reasons.setdefault(path, []).append("命中代码符号：" + ", ".join(symbol_matches[:4]))
-            name = Path(path).stem.lower()
-            if any(term in name for term in terms):
-                score += 6
-                reasons.setdefault(path, []).append("文件名与需求相关")
-            if score:
-                scores[path] = score
+        normalized_requirement = requirement.lower().replace("\\", "/")
+        for path, document in documents.items():
+            score = 0.0
+            matched_by_field: dict[str, list[str]] = {}
+            for term, query_weight in query_terms.items():
+                frequency = document_frequency[term]
+                if not frequency:
+                    continue
+                inverse_frequency = math.log(1 + (total_documents - frequency + 0.5) / (frequency + 0.5))
+                for field, field_weight in LEXICAL_FIELD_WEIGHTS.items():
+                    term_frequency = document[field].get(term, 0)
+                    if not term_frequency:
+                        continue
+                    length = max(1, sum(document[field].values()))
+                    average = max(1.0, average_lengths[field])
+                    normalized_frequency = (
+                        term_frequency * 2.2
+                        / (term_frequency + 1.2 * (0.25 + 0.75 * length / average))
+                    )
+                    score += query_weight * field_weight * inverse_frequency * normalized_frequency
+                    matched_by_field.setdefault(field, []).append(term)
+
+            filename = Path(path).name.lower()
+            if path.lower() in normalized_requirement or filename in normalized_requirement:
+                score += 12.0
+                reasons.setdefault(path, []).append("需求明确指定文件路径或文件名")
+            role_bonus = self._lexical_role_bonus(path, requirement) if score > 0 else 0.0
+            if role_bonus:
+                score += role_bonus
+                reasons.setdefault(path, []).append("文件角色与需求类型匹配")
+            strong_terms = set(matched_by_field.get("path", [])) | set(matched_by_field.get("symbols", []))
+            if len(strong_terms) >= 2:
+                score += 2.0
+                reasons.setdefault(path, []).append("路径或符号命中多个组合词")
+            if score < LEXICAL_MIN_SCORE:
+                continue
+            for field, label in (("path", "路径"), ("symbols", "代码符号"),
+                                 ("imports", "导入"), ("body", "正文")):
+                matched = list(dict.fromkeys(matched_by_field.get(field, [])))
+                if matched:
+                    reasons.setdefault(path, []).append(f"BM25 {label}命中：" + ", ".join(matched[:6]))
+            scores[path] = round(score, 6)
         return scores, reasons
+
+    @classmethod
+    def _lexical_query_terms(cls, requirement: str) -> dict[str, float]:
+        terms = {term: 1.0 for term in cls._tokenize(requirement)
+                 if term not in QUERY_STOP_TERMS and len(term) >= 2}
+        lowered = requirement.lower()
+        for phrase, aliases in SEMANTIC_ALIASES.items():
+            if phrase in lowered:
+                for alias in aliases:
+                    for term in cls._tokenize(alias):
+                        terms[term] = max(terms.get(term, 0.0), 1.35)
+        return dict(list(terms.items())[:80])
+
+    @classmethod
+    def _lexical_fields(cls, path: str, record: dict) -> dict[str, Counter]:
+        cached = record.get("lexical_fields")
+        if cached:
+            return {field: Counter(cached.get(field, {})) for field in LEXICAL_FIELD_WEIGHTS}
+        return {
+            "path": Counter(cls._tokenize(path)),
+            "symbols": Counter(term for symbol in record.get("symbols", []) for term in cls._tokenize(symbol)),
+            "imports": Counter(term for imported in record.get("imports_raw", []) for term in cls._tokenize(imported)),
+            "body": Counter(cls._tokenize(record.get("search_text", "")[:40_000])),
+        }
+
+    @staticmethod
+    def _lexical_role_bonus(path: str, requirement: str) -> float:
+        lowered = requirement.lower()
+        name = Path(path).stem.lower()
+        suffix = Path(path).suffix.lower()
+        bonus = 0.0
+        if "页面" in requirement and re.search(r"(?:page|view|screen)$", name):
+            bonus += 2.5
+        if any(term in requirement for term in ("测试", "回归")) and any(marker in path.lower() for marker in TEST_MARKERS):
+            bonus += 3.0
+        if any(term in requirement for term in ("样式", "主题", "响应式")) and suffix in {".css", ".scss"}:
+            bonus += 3.0
+        if "全局状态" in requirement and any(term in name for term in ("store", "context", "provider")):
+            bonus += 3.0
+        if "路由" in requirement and any(term in name for term in ("route", "router", "app", "application")):
+            bonus += 2.5
+        if "组件" in requirement and "/shared/" in path.lower():
+            bonus += 1.5
+        if "test" in lowered and any(marker in path.lower() for marker in TEST_MARKERS):
+            bonus += 3.0
+        return bonus
 
     def _semantic_scores(self, records: dict[str, dict], requirement: str) -> dict[str, float]:
         query_tokens = self._semantic_query_tokens(requirement)
@@ -365,7 +478,8 @@ class RepositoryCodeIndex:
     @staticmethod
     def _tokenize(value: str) -> list[str]:
         value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
-        english = re.findall(r"[A-Za-z_$][A-Za-z0-9_$-]{1,}", value.lower())
+        value = value.replace("_", " ").replace("-", " ").replace("/", " ").replace("\\", " ")
+        english = re.findall(r"[A-Za-z$][A-Za-z0-9$]{1,}", value.lower())
         chinese_segments = re.findall(r"[\u4e00-\u9fff]+", value)
         chinese = [
             segment[index:index + 2]
@@ -430,6 +544,12 @@ class RepositoryCodeIndex:
             "referenced_by": [],
             "symbols": list(dict.fromkeys(symbols))[:200],
             "search_text": (relative + "\n" + content).lower()[:80_000],
+            "lexical_fields": {
+                "path": dict(Counter(self._tokenize(relative))),
+                "symbols": dict(Counter(term for symbol in symbols for term in self._tokenize(symbol))),
+                "imports": dict(Counter(term for imported in imports for term in self._tokenize(imported))),
+                "body": dict(Counter(self._tokenize(content[:40_000]))),
+            },
             "chunks": code_chunks(relative, content),
         }
 
@@ -465,22 +585,11 @@ class RepositoryCodeIndex:
         # Unicode letters, so text such as ``History页面`` was previously
         # indexed as one term and failed to match the standalone ``History``
         # identifier in source code.
-        terms = [
-            term.lower()
-            for term in re.findall(
-                r"[A-Za-z_$][A-Za-z0-9_$-]{2,}|[\u4e00-\u9fff]{2,}",
-                requirement,
-            )
-        ]
-        aliases = {
-            "首页": ["app", "home", "index"], "按钮": ["button", "btn"],
-            "登录": ["login", "auth"], "样式": ["css", "style"],
-            "测试": ["test", "spec"], "弹窗": ["alert", "modal", "dialog"],
-        }
-        for key, values in aliases.items():
-            if key in requirement:
-                terms.extend(values)
-        return list(dict.fromkeys(terms))[:30]
+        terms = RepositoryCodeIndex._tokenize(requirement)
+        for phrase, aliases in SEMANTIC_ALIASES.items():
+            if phrase in requirement.lower():
+                terms.extend(term for alias in aliases for term in RepositoryCodeIndex._tokenize(alias))
+        return [term for term in dict.fromkeys(terms) if term not in QUERY_STOP_TERMS][:80]
 
     @staticmethod
     def _is_test(path: str) -> bool:

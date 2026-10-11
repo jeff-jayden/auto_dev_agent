@@ -93,7 +93,7 @@ CASES = (
 
 
 class RetrievalEvaluator:
-    """Deterministic A/B benchmark for legacy and hybrid repository retrieval."""
+    """Deterministic A/B benchmark for fielded lexical and hybrid retrieval."""
 
     def __init__(self, indexer: RepositoryCodeIndex | None = None, k: int = 3):
         """初始化代码检索评测器。
@@ -201,7 +201,7 @@ class RetrievalEvaluator:
 
 
 def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCodeIndex, k: int = 3, *, repository_identity: str | None = None, baseline_sha: str | None = None) -> dict:
-    """同一工作区/同一标签对比旧混合检索与真实 RAG；不把契约假数据当线上效果。"""
+    """同一工作区/同一标签对比 BM25F 混合基线与真实 RAG。"""
     from repository.analyzer import RepositoryAnalyzer
     if indexer.vector_store is None:
         raise ValueError("真实仓库评测必须启用 RAG_RETRIEVAL_MODE=embedding")
@@ -242,7 +242,7 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
     old = evaluator._metrics(rows, position=1).model_dump()
     new = evaluator._metrics(rows, position=2).model_dump()
     return {"dataset": dataset.get("name", "custom"), "dataset_kind": "real_repository", "case_count": len(rows), "k": k,
-            "baseline_strategy": "legacy_hash_hybrid", "hybrid_strategy": "embedding_chroma_rrf_v1",
+            "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1",
             "repository": str(repository.resolve()), "head_sha": head,
             "content_fingerprint": hashlib.sha256(json.dumps([(p, r["hash"]) for p, r in sorted(index["files"].items())]).encode()).hexdigest(),
             "embedding_model": indexer.vector_store.embedding.model,

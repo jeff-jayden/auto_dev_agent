@@ -174,7 +174,7 @@ class RepositoryAnalysisTests(unittest.TestCase):
         self.assertIn("src/index.js", context.dependency_files)
         self.assertIn("src/App.test.js", context.test_files)
 
-    def test_hybrid_rag_recalls_semantic_code_file_missed_by_legacy_keywords(self):
+    def test_bilingual_bm25_and_hybrid_recall_semantic_code_file(self):
         repository = self.root / "semantic-repo"
         repository.mkdir()
         files = {
@@ -196,9 +196,49 @@ class RepositoryAnalysisTests(unittest.TestCase):
         baseline = indexer.rank_files(index, "增加用户身份校验", strategy="lexical")
         hybrid = indexer.rank_files(index, "增加用户身份校验", strategy="hybrid")
 
-        self.assertNotIn("auth/session_guard.py", [item["path"] for item in baseline])
+        self.assertEqual(baseline[0]["path"], "auth/session_guard.py")
+        self.assertTrue(any("BM25" in reason for reason in baseline[0]["reasons"]))
         self.assertEqual(hybrid[0]["path"], "auth/session_guard.py")
         self.assertTrue(any("语义向量" in reason for reason in hybrid[0]["reasons"]))
+
+    def test_lexical_bm25_splits_identifiers_and_weights_specific_fields(self):
+        indexer = RepositoryCodeIndex()
+        records = {
+            "src/shared/lib/useKeyboard.js": {
+                "symbols": ["useKeyboard", "keydown"],
+                "imports_raw": ["./router"],
+                "search_text": "export function useKeyboard() { function keydown() {} }",
+            },
+            "src/features/search/SearchPage.js": {
+                "symbols": ["SearchPage"],
+                "imports_raw": [],
+                "search_text": "export function SearchPage() { return 'keyboard help'; }",
+            },
+            "src/reportWebVitals.js": {
+                "symbols": ["reportWebVitals"],
+                "imports_raw": [],
+                "search_text": "export function reportWebVitals() {}",
+            },
+        }
+
+        ranked = indexer.rank_files({"files": records}, "实现全局键盘快捷键", strategy="lexical")
+
+        self.assertEqual(ranked[0]["path"], "src/shared/lib/useKeyboard.js")
+        self.assertNotIn("src/reportWebVitals.js", [item["path"] for item in ranked])
+        self.assertTrue(any("代码符号" in reason for reason in ranked[0]["reasons"]))
+
+    def test_lexical_role_bonus_prefers_matching_page_without_force_filling(self):
+        indexer = RepositoryCodeIndex()
+        records = {
+            "src/features/studio/StudioPage.js": {"symbols": ["StudioPage"], "search_text": "studio uploads"},
+            "src/features/search/SearchPage.js": {"symbols": ["SearchPage"], "search_text": "search query"},
+            "src/reportWebVitals.js": {"symbols": ["reportWebVitals"], "search_text": "performance"},
+        }
+
+        ranked = indexer.rank_files({"files": records}, "实现创作者 Studio 工作台页面", strategy="lexical")
+
+        self.assertEqual(ranked[0]["path"], "src/features/studio/StudioPage.js")
+        self.assertNotIn("src/reportWebVitals.js", [item["path"] for item in ranked])
 
     def test_code_index_is_cached_and_incrementally_updated_by_git_head(self):
         analyzer = RepositoryAnalyzer(self.root / "indexes")
