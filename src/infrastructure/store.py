@@ -34,6 +34,8 @@ class SQLiteTaskStore:
         self.database_path = database_path
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        from infrastructure.memory import RepositoryMemory
+        self.memory = RepositoryMemory(database_path)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -241,6 +243,9 @@ class SQLiteTaskStore:
         """
         from agents.task_context import refresh_task_summary
         refresh_task_summary(task)
+        from infrastructure.memory import attach_project_memory
+        self.memory.observe(task)
+        attach_project_memory(task, self.memory)
         serialized = task.model_dump_json()
         with self._connect() as connection:
             connection.execute(
@@ -275,7 +280,12 @@ class SQLiteTaskStore:
         """
         with self._connect() as connection:
             row = connection.execute("SELECT data FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return Task.model_validate_json(row["data"]) if row else None
+        if row is None:
+            return None
+        task = Task.model_validate_json(row["data"])
+        from infrastructure.memory import attach_project_memory
+        attach_project_memory(task, self.memory)
+        return task
 
     def list_tasks(self) -> list[Task]:
         """按创建时间倒序返回所有任务，最新任务排在最前。"""

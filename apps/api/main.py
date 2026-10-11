@@ -61,6 +61,14 @@ class RevisionRequest(BaseModel):
     feedback: str = Field(min_length=3, max_length=2000)
 
 
+class ProjectMemoryRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9_.-]+$")
+    kind: str = Field(pattern="^(architecture|convention|test_command)$")
+    content: str = Field(min_length=1, max_length=2000)
+    source: str = Field(min_length=1, max_length=500)
+    source_sha: str | None = Field(default=None, max_length=64)
+
+
 class GitHubCommentProcessRequest(BaseModel):
     actor: str = Field(min_length=2, max_length=80)
     comment_keys: list[str] = Field(min_length=1, max_length=20)
@@ -197,6 +205,34 @@ def rerun_task(task_id: str):
 @app.get("/api/repositories")
 def list_repositories():
     return orchestrator.store.list_repositories()
+
+
+@app.get("/api/repositories/{repository_id}/memories")
+def search_project_memories(repository_id: str, query: str = "", kind: str = "", limit: int = 4, offset: int = 0):
+    if not orchestrator.store.get_repository(repository_id):
+        raise HTTPException(status_code=404, detail="Repository not found")
+    try:
+        return orchestrator.store.memory.search(repository_id, query, kind, limit, offset)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/repositories/{repository_id}/memories")
+def save_project_memory(repository_id: str, request: ProjectMemoryRequest):
+    if not orchestrator.store.get_repository(repository_id):
+        raise HTTPException(status_code=404, detail="Repository not found")
+    try:
+        orchestrator.store.memory.put(repository_id, **request.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"saved": True, "key": request.key}
+
+
+@app.delete("/api/repositories/{repository_id}/memories/{key}")
+def invalidate_project_memory(repository_id: str, key: str):
+    if not orchestrator.store.memory.invalidate(repository_id, key):
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"invalidated": True}
 
 
 @app.get("/api/repository-folders")

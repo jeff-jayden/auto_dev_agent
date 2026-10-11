@@ -16,6 +16,8 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
 from .task_context import build_task_context, query_task_history
+from .task_memory import query_execution_memory, excerpt
+from infrastructure.memory import RepositoryMemory
 from llm.context_budget import budget_middleware
 
 from domain.models import ToolCallAudit
@@ -414,6 +416,40 @@ class RepositoryExplorationToolRegistry:
                 return result
             return self._execute("query_task_history", arguments, reason, retrieve)
 
+        @tool("query_execution_memory")
+        def execution_memory_tool(offset: int = 0, text_offset: int = 0, limit: int = 2,
+                                  reason: str = ""):
+            """分页读取当前任务开发尝试的原始输出；重试或诊断失败时使用，offset 从 0 开始。"""
+            arguments = dict(offset=offset, text_offset=text_offset, limit=limit)
+            def retrieve():
+                result = query_execution_memory(task, **arguments)
+                task.metadata.setdefault("retrieved_history", []).append(result)
+                task.metadata["retrieved_history"] = task.metadata["retrieved_history"][-4:]
+                return result
+            return self._execute("query_execution_memory", arguments, reason, retrieve)
+
+        @tool("query_project_memory")
+        def project_memory_tool(query: str = "", kind: str = "", offset: int = 0,
+                                text_offset: int = 0, limit: int = 2, reason: str = ""):
+            """检索当前仓库长期记忆；kind 为 architecture/convention/test_command。原文分页，记录须核对当前代码。"""
+            arguments = dict(query=query, kind=kind, offset=offset, text_offset=text_offset, limit=limit)
+            def retrieve():
+                if text_offset < 0:
+                    raise ValueError("Invalid text offset")
+                path = task.metadata.get("memory_database")
+                if not path:
+                    return {"records": [], "total_matches": 0, "next_offset": None}
+                result = RepositoryMemory(path).search(task.repository_id or "", query, kind, limit, offset)
+                for item in result["records"]:
+                    original = item["content"]
+                    item["content"] = excerpt(original[text_offset:], 1200)
+                    end = text_offset + len(item["content"])
+                    item["next_text_offset"] = end if end < len(original) else None
+                task.metadata.setdefault("retrieved_history", []).append(result)
+                task.metadata["retrieved_history"] = task.metadata["retrieved_history"][-4:]
+                return result
+            return self._execute("query_project_memory", arguments, reason, retrieve)
+
         tools = [
             search_text_tool,
             search_symbol_tool,
@@ -423,6 +459,7 @@ class RepositoryExplorationToolRegistry:
         ]
         if task is not None:
             tools.append(history_tool)
+            tools.extend([execution_memory_tool, project_memory_tool])
         self._tools: dict[str, BaseTool] = {item.name: item for item in tools}
 
     @property

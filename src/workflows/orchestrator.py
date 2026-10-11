@@ -424,6 +424,7 @@ class TaskOrchestrator:
                 task.title, requirement, task.repository_analysis,
                 task.design_reference.context if task.design_reference else "",
                 repository_root=repository_root,
+                project_memory=self.store.memory.context_records(task.repository_id or "", requirement),
             )
             task.error = None
         except ValueError as error:
