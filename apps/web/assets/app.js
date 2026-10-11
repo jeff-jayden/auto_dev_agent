@@ -807,6 +807,77 @@ function describeAgentActivity(span, job, task) {
   return {title, detail, name, taskStatus: task.status};
 }
 
+function renderChatExecution(task, progress, diffFiles) {
+  const job = progress.job;
+  if (!job) return "";
+  const active = ["queued", "running", "pause_requested"].includes(job.status);
+  const spans = (progress.spans || []).filter((span) => span.kind === "tool" || span.kind === "llm");
+  const current = [...spans].reverse().find((span) => span.status === "running");
+  const activity = describeAgentActivity(current, job, task);
+  const labels = {running: "进行中", succeeded: "完成", failed: "失败"};
+  const renderAction = (span) => {
+    const attrs = span.attributes || {};
+    const description = describeAgentActivity(span, job, task).title.replace(/正在/g, "");
+    const details = [attrs.path, attrs.query, attrs.reason, attrs.command].filter(Boolean)
+      .map((value) => String(value).slice(0, 240));
+    if (attrs.exit_code != null) details.push(`退出码 ${attrs.exit_code}`);
+    const output = span.error || span.output_summary;
+    if (output) details.push(String(output).replace(/\s+/g, " ").slice(0, 220));
+    return `<li class="chat-action ${escapeHtml(span.status)}"><div><strong>${escapeHtml(description)}</strong><span>${escapeHtml(labels[span.status] || span.status)}</span></div><code>${escapeHtml(span.name)}</code>${details.length ? `<p>${escapeHtml(details.join(" · "))}</p>` : ""}<time>${span.started_at ? escapeHtml(new Date(span.started_at).toLocaleTimeString()) : ""}</time></li>`;
+  };
+  const recent = spans.slice(-5).map(renderAction).join("");
+  const older = spans.slice(0, -5);
+  let body = active
+    ? `<p>${escapeHtml(job.status === "queued" ? "任务已排队，等待 Worker 领取。" : current ? activity.title : "Agent 正在处理任务，等待下一项执行结果。")}</p>`
+    : `<p>${escapeHtml(job.status === "failed" ? "本次执行未完成，已保留当前工作区，请根据下面的原因处理后重试。" : ["paused", "cancelled"].includes(job.status) ? "执行已停止，可以检查当前修改后再继续。" : "本次后台执行已结束。任务状态：" + (statusLabels[task.status] || task.status) + "。")}</p>`;
+  if (recent) body += `<b class="chat-section-label">执行动态 · ${spans.length} 项调用</b><ol class="chat-actions">${recent}</ol>`;
+  if (older.length) body += `<details data-chat-detail="older-actions"><summary>查看更早的 ${older.length} 项调用</summary><ol class="chat-actions">${older.map(renderAction).join("")}</ol></details>`;
+  if (!active) {
+    const attempts = task.development_attempts || [];
+    const latestAttempt = attempts[attempts.length - 1];
+    // 文件来自实时 Git Diff，不把历史尝试中已回滚的文件当作当前修改。
+    const paths = (diffFiles || []).map((file) => file.path);
+    body += `<b class="chat-section-label">执行总结</b>`;
+    if (latestAttempt?.summary) body += `<p>最近一项开发记录：${escapeHtml(latestAttempt.summary)}</p>`;
+    body += `<div class="chat-summary-files"><b>当前累计修改${diffFiles ? ` · ${paths.length} 个文件` : ""}</b>${!diffFiles ? "<p>文件差异暂未加载成功，请稍后刷新确认。</p>" : paths.length ? paths.map((path) => `<code>${escapeHtml(path)}</code>`).join("") : "<p>当前没有代码差异。</p>"}</div>`;
+    const testSpans = spans.filter((span) => span.name === "tool.run_tests");
+    const lastTest = testSpans[testSpans.length - 1];
+    body += `<p><b>本次验证：</b>${lastTest ? escapeHtml(lastTest.attributes?.exit_code != null ? `最近测试退出码 ${lastTest.attributes.exit_code}${lastTest.attributes.exit_code === 0 ? "（通过，不等于需求已验收）" : "（未通过）"}` : lastTest.status === "running" ? "测试尚未结束" : "测试结果见执行动态") : "本次执行没有测试记录，不代表测试通过。"}</p>`;
+    if (job.error) {
+      const reason = /Automatic repair exhausted/i.test(job.error)
+        ? `自动修复次数已用尽，仍未完成验证。${latestAttempt ? analyzeAttemptFailure(latestAttempt) : "请查看执行记录定位原因。"}`
+        : /Context budget exceeded/i.test(job.error)
+          ? "本次请求超过模型上下文预算，生成修改方案前已停止。"
+        : /preserved_behaviors|validation error|structured patch proposal/i.test(job.error)
+          ? "模型生成的修改方案未通过格式校验，未能继续应用本轮提案。"
+          : job.error;
+      body += `<p class="chat-execution-error"><b>未完成原因：</b>${escapeHtml(reason)}</p><details data-chat-detail="execution-error"><summary>查看原始错误</summary><p>${escapeHtml(job.error)}</p></details>`;
+    }
+    const review = (task.reviews || []).slice(-1)[0];
+    if (review) body += `<p><b>最近审查：</b>${escapeHtml(review.summary)}${review.decision !== "approved" ? "；请先处理审查意见。" : ""}</p>`;
+  }
+  return `<div class="chat-message agent chat-execution" aria-live="polite"><b>Agent · ${active ? "实时执行" : "执行结果"}</b><small>Job ${escapeHtml(job.id)} · ${escapeHtml(jobStatusLabels[job.status] || job.status)} · 动态随后台刷新</small>${body}</div>`;
+}
+
+function updateChatMessages(element, html, taskId, visible) {
+  const nearBottom = isChatNearBottom(element);
+  const taskChanged = renderedChatTaskId !== taskId;
+  if (taskChanged || renderedChatRevision !== html) {
+    const openDetails = taskChanged ? [] : [...element.querySelectorAll("details[open][data-chat-detail]")]
+      .map((detail) => detail.dataset.chatDetail);
+    const scrollTop = element.scrollTop;
+    element.innerHTML = html;
+    element.querySelectorAll("details[data-chat-detail]").forEach((detail) => {
+      detail.open = openDetails.includes(detail.dataset.chatDetail);
+    });
+    element.scrollTop = scrollTop;
+  }
+  if (visible && (taskChanged || !renderedChatVisible || nearBottom)) scrollChatToLatest(element);
+  renderedChatTaskId = taskId;
+  renderedChatRevision = html;
+  renderedChatVisible = visible;
+}
+
 function developmentPhaseIndex(progress, task) {
   const stages = new Set((progress.checkpoints || []).map((item) => item.stage));
   if (["review_approved", "waiting_release_approval", "publishing_pull_request", "waiting_merge_approval", "merging", "merged"].includes(task.status)) return 5;
@@ -1107,9 +1178,11 @@ async function render(task) {
   $("#approve-button").disabled = !task.analysis || !task.technical_plan;
   const hasResult = Boolean(task.result); $("#result-panel").classList.toggle("hidden", !hasResult);
   let diffFiles = [];
+  let diffAvailable = true;
   try {
     diffFiles = await loadCurrentDiffFiles(task);
   } catch (error) {
+    diffAvailable = false;
     notify(`代码对比加载失败：${error.message}`);
   }
   $("#open-current-diff-button").disabled = diffFiles.length === 0;
@@ -1147,7 +1220,7 @@ async function render(task) {
   renderReviewGate(task);
   renderUIAcceptance(task);
   const canGiveFeedback = ["waiting_release_approval", "changes_requested", "waiting_merge_approval", "merged"].includes(task.status);
-  const showChat = hasResult;
+  const showChat = hasResult || attempts.length > 0 || Boolean(progress.job && task.technical_plan);
   $("#feedback-panel").classList.toggle("hidden", !showChat);
   $("#development-placeholder").classList.toggle("hidden", showChat || waitingRisk);
   $("#code-feedback").disabled = !canGiveFeedback;
@@ -1162,8 +1235,7 @@ async function render(task) {
     ? '<div class="chat-message agent"><b>Agent · 后续任务</b><p>此任务从已合入任务 ' + escapeHtml(task.metadata.followup_of) + ' 派生，并已基于默认分支最新代码重新建立工作区。</p></div>' +
       inheritedConversation.map((feedback, index) => '<div class="chat-message user inherited"><b>历史意见 · 第 ' + (index + 1) + ' 轮</b><p>' + escapeHtml(feedback) + '</p></div>').join("")
     : '';
-  const initialChat = followupContext + '<div class="chat-message user"><b>最初需求</b><p>' + escapeHtml(task.requirement) + '</p></div>' +
-    '<div class="chat-message agent"><b>Agent</b><p>首轮开发已完成。请在文件对比中检查当前代码；如果不符合要求，可以继续发送修改意见。</p></div>';
+  const initialChat = followupContext + '<div class="chat-message user"><b>最初需求</b><p>' + escapeHtml(task.requirement) + '</p></div>';
   const feedbackStatusLabels = {
     running: "正在修改",
     failed: "修改失败",
@@ -1173,27 +1245,15 @@ async function render(task) {
     changes_requested: "需要继续调整",
     review_repairing: "CR 修复中",
   };
-  const chatMessages = $("#chat-messages");
-  const wasNearBottom = isChatNearBottom(chatMessages);
-  const chatRevision = JSON.stringify(feedbackRounds);
-  const shouldScrollToLatest = showChat && (
-    !renderedChatVisible ||
-    renderedChatTaskId !== task.id ||
-    renderedChatRevision !== chatRevision ||
-    wasNearBottom
-  );
-  chatMessages.innerHTML = initialChat + feedbackRounds.map((item, index) => {
+  const chatHtml = initialChat + feedbackRounds.map((item, index) => {
     const files = (item.changed_files || []).map((path) => escapeHtml(path)).join(" · ");
     const statusLabel = feedbackStatusLabels[item.status] || (item.status ? item.status : "历史记录");
     const agentMessage = item.agent_message || "这条意见来自旧版本；请在当前文件对比中查看最终累计修改。";
     return '<div class="chat-message user"><b>你 · 第 ' + (index + 1) + ' 轮</b><p>' + escapeHtml(item.feedback) + '</p><small>' + escapeHtml(item.submitted_at ? new Date(item.submitted_at).toLocaleString() : "") + '</small></div>' +
       '<div class="chat-message agent"><b>Agent · ' + escapeHtml(statusLabel) + '</b><p>' + escapeHtml(agentMessage) + '</p>' +
-      (files ? '<div class="chat-files">修改文件：' + files + '</div>' : '<div class="chat-files">本轮尚无代码变化</div>') + '</div>';
-  }).join("");
-  renderedChatTaskId = task.id;
-  renderedChatRevision = chatRevision;
-  renderedChatVisible = showChat;
-  if (shouldScrollToLatest) scrollChatToLatest(chatMessages);
+      (files ? '<div class="chat-files"><b>本轮修改文件：</b>' + files + '</div>' : '<div class="chat-files">本轮尚无代码变化</div>') + '</div>';
+  }).join("") + renderChatExecution(task, progress, diffAvailable ? diffFiles : null);
+  updateChatMessages($("#chat-messages"), chatHtml, task.id, showChat);
   $("#release-gate").classList.toggle("hidden", task.status !== "waiting_release_approval");
   const uiBlocking = (task.ui_acceptance?.checks || []).some((check) => check.blocking && check.status === "failed");
   $("#publish-pr-button").disabled = uiBlocking;

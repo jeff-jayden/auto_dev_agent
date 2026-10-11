@@ -1,5 +1,23 @@
 :root{--ink:#1f2328;--muted:#667085;--bg:#f3f4f6;--panel:#fff;--line:#d8dee6;--green:#2563eb;--green-soft:#eff6ff;--lime:#3b82f6;--red:#b42318;--success:#1f883d;--success-soft:#ecfdf3;--sidebar:#17191c;--sidebar-muted:#9ca3af}
 *{box-sizing:border-box}
+.chat-message.chat-execution{width:96%;max-width:96%;font-size:14px;overflow-wrap:anywhere}
+.chat-execution .chat-section-label{margin:14px 0 8px;font-size:14px}
+.chat-actions{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.chat-action{padding:9px 11px;border:1px solid var(--line);border-left:3px solid #94a3b8;border-radius:6px;background:#fff}
+.chat-action>div{display:flex;align-items:start;justify-content:space-between;gap:12px}
+.chat-action strong{font-size:14px;font-weight:600}
+.chat-action span,.chat-action time{font-size:12px;color:var(--muted)}
+.chat-action code{display:block;font-size:12px;margin-top:4px;color:var(--muted)}
+.chat-action p{font-size:13px;line-height:1.6;margin:5px 0}
+.chat-action.running{border-left-color:var(--green);background:var(--green-soft)}
+.chat-action.failed{border-left-color:var(--red)}
+.chat-action.succeeded{border-left-color:var(--success)}
+.chat-summary-files{margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.chat-summary-files code{display:block;font-size:13px;line-height:1.8;color:var(--green)}
+.chat-execution details{margin-top:10px}
+.chat-execution details>summary{font-size:13px;cursor:pointer;color:var(--green)}
+.chat-execution .chat-execution-error{color:var(--red)}
+.chat-message .chat-files{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
 html,body{height:100%;margin:0}
 body{overflow:hidden;color:var(--ink);background:var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;font-size:14px}
 .development-progress-panel{min-height:max-content!important;flex-shrink:0}

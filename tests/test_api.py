@@ -11,6 +11,79 @@ from tests.support import build_orchestrator
 from domain.models import ExecutionJob, TaskStatus
 
 
+def test_development_chat_live_actions_summary_and_scroll():
+    """执行前端纯渲染函数，避免把历史测试或已回滚文件误报为本轮结果。"""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed for frontend rendering assertions")
+    script = r'''
+const fs = require('fs');
+const assert = require('assert/strict');
+const source = fs.readFileSync('apps/web/assets/app.js', 'utf8');
+function load(name) {
+  const start = source.indexOf(`function ${name}(`);
+  let end = source.indexOf('\nfunction ', start + 1);
+  const asyncEnd = source.indexOf('\nasync function ', start + 1);
+  if (end < 0 || (asyncEnd >= 0 && asyncEnd < end)) end = asyncEnd;
+  return source.slice(start, end < 0 ? undefined : end);
+}
+eval(['escapeHtml', 'describeAgentActivity', 'analyzeAttemptFailure',
+      'renderChatExecution', 'isChatNearBottom', 'scrollChatToLatest',
+      'updateChatMessages'].map(load).join('\n'));
+const statusLabels = {changes_requested: 'CR 要求修改'};
+const jobStatusLabels = {running: '执行中', failed: '执行失败', paused: '已暂停'};
+const task = {status: 'changes_requested', development_attempts: [
+  {summary: '旧的开发记录', changed_files: ['reverted.js'], exit_code: 0}
+], reviews: [{decision: 'changes_requested', summary: '缺少 tab 验证'}]};
+const progress = {job: {id: 'job-1', status: 'running'}, spans: [
+  {id: 'tool-1', kind: 'tool', name: 'tool.read_file', status: 'running',
+   attributes: {path: 'src/YourVideos.js', reason: '<script>unsafe</script>'}}
+]};
+let html = renderChatExecution(task, progress, []);
+assert.match(html, /实时执行/);
+assert.match(html, /tool.read_file/);
+assert.match(html, /src\/YourVideos.js/);
+assert(!html.includes('<script>unsafe</script>'));
+assert(html.includes('&lt;script&gt;'));
+assert(!html.includes('执行总结'));
+progress.job = {id: 'job-1', status: 'failed', error: 'Automatic repair exhausted after 3 attempts'};
+html = renderChatExecution(task, progress, [{path: 'actual.js'}]);
+assert.match(html, /执行总结/);
+assert.match(html, /actual.js/);
+assert(!html.includes('reverted.js'));
+assert.match(html, /没有测试记录/);
+assert.match(html, /自动修复次数已用尽/);
+assert.match(html, /缺少 tab 验证/);
+progress.spans.push({kind: 'tool', name: 'tool.run_tests', status: 'succeeded', attributes: {exit_code: 1}});
+assert.match(renderChatExecution(task, progress, []), /退出码 1（未通过）/);
+progress.job.status = 'paused';
+assert.match(renderChatExecution(task, progress, null), /差异暂未加载成功/);
+assert.match(renderChatExecution(task, progress, []), /执行已停止/);
+let renderedChatTaskId = 'task', renderedChatRevision = 'same', renderedChatVisible = true;
+const chatBottomThreshold = 48;
+const requestAnimationFrame = (callback) => callback();
+let writes = 0;
+const openDetail = {dataset: {chatDetail: 'older-actions'}, open: true};
+const element = {scrollTop: 100, scrollHeight: 1000, clientHeight: 200,
+  querySelectorAll: () => [openDetail], set innerHTML(value) {writes++;}};
+updateChatMessages(element, 'same', 'task', true);
+assert.equal(writes, 0);
+updateChatMessages(element, 'changed', 'task', true);
+assert.equal(element.scrollTop, 100); // 阅读历史时不抢滚动位置。
+assert.equal(openDetail.open, true);
+element.scrollTop = 800;
+updateChatMessages(element, 'latest', 'task', true);
+assert.equal(element.scrollTop, 1000);
+'''
+    result = subprocess.run([node], input=script, text=True, encoding="utf-8", capture_output=True,
+                            cwd=Path(__file__).resolve().parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 class ApiTests(unittest.TestCase):
     def test_api_flow(self):
         with tempfile.TemporaryDirectory() as directory:
