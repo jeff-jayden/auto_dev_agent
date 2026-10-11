@@ -85,6 +85,21 @@ SEMANTIC_ALIASES = {
     "首页": ["home", "landing"],
     "应用装配": ["app", "application", "bootstrap"],
 }
+CONTEXT_ROLE_ALIASES = {
+    "键盘快捷键": ["keyboard", "usekeyboard"],
+    "深浅主题": ["settings", "theme"],
+    "隐私开关": ["settings", "privacy"],
+    "订阅动态": ["subscriptions"],
+    "频道主页": ["channel"],
+    "相关推荐": ["recommendations"],
+    "自动连播": ["recommendations", "autoplay"],
+    "分页逻辑": ["pagination", "usepagination"],
+    "搜索结果": ["filters", "selectvideos"],
+    "侧边栏": ["sidebar"],
+    "顶部导航栏": ["header"],
+    "模态框": ["modal"],
+    "视频评论": ["comments"],
+}
 
 
 class RepositoryCodeIndex:
@@ -430,8 +445,10 @@ class RepositoryCodeIndex:
             symbol_terms = {term for symbol in records[path].get("symbols", []) for term in self._tokenize(symbol)}
             overlap = len(query_terms & (path_terms | symbol_terms))
             role_score = 0.3 if path in primary else 0.0
-            role_score += min(0.18, overlap * 0.06)
-            role_score += min(0.09, self._lexical_role_bonus(path, requirement) * 0.03)
+            # 多个近义动作词（如 delete/remove）只算一次，避免通用动作压过业务实体。
+            role_score += 0.06 if overlap else 0.0
+            role_score += min(0.03, self._lexical_role_bonus(path, requirement) * 0.01)
+            role_score += self._context_role_bonus(path, records[path], requirement)
             if self._is_test(path):
                 role_score += 0.3 if wants_tests else -0.08
             score = rank_score + relation_scores.get(path, 0.0) + role_score
@@ -555,6 +572,24 @@ class RepositoryCodeIndex:
             bonus += 1.5
         if "test" in lowered and any(marker in path.lower() for marker in TEST_MARKERS):
             bonus += 3.0
+        return bonus
+
+    @classmethod
+    def _context_role_bonus(cls, path: str, record: dict, requirement: str) -> float:
+        """只影响最终上下文排序的高精度复合意图，不改变原始召回。"""
+        lowered = requirement.lower()
+        file_terms = set(cls._tokenize(Path(path).stem))
+        file_terms.update(
+            term for symbol in record.get("symbols", []) for term in cls._tokenize(symbol)
+        )
+        bonus = 0.0
+        for phrase, aliases in CONTEXT_ROLE_ALIASES.items():
+            if phrase not in lowered:
+                continue
+            alias_terms = {term for alias in aliases for term in cls._tokenize(alias)}
+            if file_terms & alias_terms:
+                # 这些映射只包含高精度复合意图，可以安全地压过“搜索/删除”等泛化邻居。
+                bonus = max(bonus, 0.34)
         return bonus
 
     def _semantic_scores(self, records: dict[str, dict], requirement: str) -> dict[str, float]:

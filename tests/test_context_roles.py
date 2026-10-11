@@ -71,6 +71,58 @@ def test_context_ranking_expands_dependency_and_prefers_definition_role():
     assert any("扩展的依赖" in reason for reason in ranked[0]["reasons"])
 
 
+def test_context_ranking_preserves_specific_top_result_over_generic_action():
+    engine = RepositoryCodeIndex()
+    records = {
+        "src/features/watch/Comments.js": {
+            "symbols": ["Comments"], "imports": [], "referenced_by": [], "search_text": "comments",
+        },
+        "src/features/studio/DeleteVideo.js": {
+            "symbols": ["DeleteVideo"], "imports": [], "referenced_by": [], "search_text": "delete video",
+        },
+        "src/features/watch/WatchPage.js": {
+            "symbols": ["WatchPage"], "imports": [], "referenced_by": [], "search_text": "watch",
+        },
+    }
+    raw = [
+        {"path": "src/features/watch/Comments.js", "score": 1.0, "reasons": [], "chunks": []},
+        {"path": "src/features/studio/DeleteVideo.js", "score": 0.9, "reasons": [], "chunks": []},
+        {"path": "src/features/watch/WatchPage.js", "score": 0.8, "reasons": [], "chunks": []},
+    ]
+
+    ranked = engine.rank_context_files(
+        {"files": records}, "实现视频评论发布、删除以及按时间排序", limit=3, ranked_hits=raw,
+    )
+
+    assert ranked[0]["path"] == "src/features/watch/Comments.js"
+
+
+def test_context_ranking_promotes_high_precision_compound_role():
+    engine = RepositoryCodeIndex()
+    records = {
+        "src/features/watch/Player.js": {
+            "symbols": ["Player"], "imports": [], "referenced_by": [], "search_text": "player",
+        },
+        "src/features/watch/Recommendations.js": {
+            "symbols": ["Recommendations"], "imports": [], "referenced_by": [], "search_text": "related autoplay",
+        },
+        "src/features/watch/WatchPage.js": {
+            "symbols": ["WatchPage"], "imports": [], "referenced_by": [], "search_text": "watch",
+        },
+    }
+    raw = [
+        {"path": "src/features/watch/Player.js", "score": 1.0, "reasons": [], "chunks": []},
+        {"path": "src/features/watch/Recommendations.js", "score": 0.9, "reasons": [], "chunks": []},
+        {"path": "src/features/watch/WatchPage.js", "score": 0.8, "reasons": [], "chunks": []},
+    ]
+
+    ranked = engine.rank_context_files(
+        {"files": records}, "实现观看页相关推荐列表和自动连播开关", limit=3, ranked_hits=raw,
+    )
+
+    assert ranked[0]["path"] == "src/features/watch/Recommendations.js"
+
+
 def test_generic_plan_language_does_not_expand_write_scope():
     repository = RepositoryAnalysis(language="javascript", framework="react", file_count=4,
         entrypoints=["src/index.js"], context_pack=RepositoryContextPack(
