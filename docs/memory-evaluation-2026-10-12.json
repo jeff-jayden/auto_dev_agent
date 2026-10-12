@@ -1,0 +1,88 @@
+{
+  "fixture": "synthetic cross-task history; real embedding model",
+  "redis": "hit/version/mutation/outage passed",
+  "lexical": {
+    "hit_at_1": 0.5,
+    "hit_at_3": 0.5,
+    "mrr": 0.5,
+    "samples": [
+      {
+        "query": "账号刚进去又被踢回认证界面，怎样处理？",
+        "expected": "episode1",
+        "rank": null,
+        "returned": [
+          "episode3"
+        ]
+      },
+      {
+        "query": "浏览器提示某个视图标识符找不到，但新页面源码已经写了",
+        "expected": "episode2",
+        "rank": 1,
+        "returned": [
+          "episode2"
+        ]
+      },
+      {
+        "query": "本地做好了按钮，代码托管网站却没有那个新模块",
+        "expected": "episode3",
+        "rank": null,
+        "returned": [
+          "episode2"
+        ]
+      },
+      {
+        "query": "给大模型看的材料太长，检查代码这一步总是过不了",
+        "expected": "episode4",
+        "rank": 1,
+        "returned": [
+          "episode4"
+        ]
+      }
+    ]
+  },
+  "semantic": {
+    "hit_at_1": 0.75,
+    "hit_at_3": 0.75,
+    "mrr": 0.75,
+    "samples": [
+      {
+        "query": "账号刚进去又被踢回认证界面，怎样处理？",
+        "expected": "episode1",
+        "rank": 1,
+        "returned": [
+          "episode1",
+          "episode3"
+        ]
+      },
+      {
+        "query": "浏览器提示某个视图标识符找不到，但新页面源码已经写了",
+        "expected": "episode2",
+        "rank": 1,
+        "returned": [
+          "episode2"
+        ]
+      },
+      {
+        "query": "本地做好了按钮，代码托管网站却没有那个新模块",
+        "expected": "episode3",
+        "rank": null,
+        "returned": [
+          "episode2"
+        ]
+      },
+      {
+        "query": "给大模型看的材料太长，检查代码这一步总是过不了",
+        "expected": "episode4",
+        "rank": 1,
+        "returned": [
+          "episode4"
+        ]
+      }
+    ]
+  },
+  "invalidated_and_foreign_excluded": true,
+  "chroma_and_embedding_outage_fallback": "passed",
+  "embedding_model": "embeddinggemma",
+  "embedding_provider": "ollama",
+  "minimum_similarity": 0.45
+}

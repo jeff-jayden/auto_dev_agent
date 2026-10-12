@@ -431,7 +431,7 @@ class RepositoryExplorationToolRegistry:
         @tool("query_project_memory")
         def project_memory_tool(query: str = "", kind: str = "", offset: int = 0,
                                 text_offset: int = 0, limit: int = 2, reason: str = ""):
-            """检索当前仓库长期记忆；kind 为 architecture/convention/test_command。原文分页，记录须核对当前代码。"""
+            """检索当前仓库长期记忆和类似问题经验；kind 为 architecture/convention/test_command/experience。原文分页，记录须核对当前代码。"""
             arguments = dict(query=query, kind=kind, offset=offset, text_offset=text_offset, limit=limit)
             def retrieve():
                 if text_offset < 0:

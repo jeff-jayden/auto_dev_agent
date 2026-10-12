@@ -26,6 +26,14 @@ def query_execution_memory(task, offset=0, text_offset=0, limit=2):
 
 
 def working_memory(task, *, recent_rounds=3):
+    from infrastructure.working_memory_cache import WorkingMemoryCache
+    cache = WorkingMemoryCache(task.metadata.get("memory_database", "unsaved"))
+    result = cache.get_or_build(task, recent_rounds, lambda: _build_working_memory(task, recent_rounds=recent_rounds))
+    task.metadata["working_memory_cache_status"] = cache.status
+    return result
+
+
+def _build_working_memory(task, *, recent_rounds=3):
     """Single projection of execution state; requirements live in task_context."""
     rounds = task.metadata.get("user_feedback_rounds", [])
     failed = next(((i, r) for i, r in reversed(list(enumerate(rounds, 1)))

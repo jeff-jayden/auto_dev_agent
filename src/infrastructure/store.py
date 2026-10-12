@@ -34,6 +34,10 @@ class SQLiteTaskStore:
         self.database_path = database_path
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if "revision" not in {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}:
+                connection.execute("ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
         from infrastructure.memory import RepositoryMemory
         self.memory = RepositoryMemory(database_path)
 
@@ -246,17 +250,22 @@ class SQLiteTaskStore:
         from infrastructure.memory import attach_project_memory
         self.memory.observe(task)
         attach_project_memory(task, self.memory)
-        serialized = task.model_dump_json()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute("SELECT revision FROM tasks WHERE id=?", (task.id,)).fetchone()
+            old_revision = previous["revision"] if previous else 0
+            task.metadata["task_revision"] = old_revision + 1
+            serialized = task.model_dump_json()
             connection.execute(
                 """
-                INSERT INTO tasks (id, status, title, data, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, status, title, data, created_at, updated_at, revision)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     status = excluded.status,
                     title = excluded.title,
                     data = excluded.data,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    revision = excluded.revision
                 """,
                 (
                     task.id,
@@ -265,8 +274,11 @@ class SQLiteTaskStore:
                     serialized,
                     task.created_at.isoformat(),
                     task.updated_at.isoformat(),
+                    task.metadata["task_revision"],
                 ),
             )
+        from infrastructure.working_memory_cache import WorkingMemoryCache
+        WorkingMemoryCache(str(self.database_path.resolve())).invalidate(task.id, old_revision)
         return task
 
     def get_task(self, task_id: str) -> Task | None:
@@ -279,10 +291,11 @@ class SQLiteTaskStore:
             找到的任务；不存在时返回 ``None``。
         """
         with self._connect() as connection:
-            row = connection.execute("SELECT data FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            row = connection.execute("SELECT data,revision FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
             return None
         task = Task.model_validate_json(row["data"])
+        task.metadata["task_revision"] = row["revision"]
         from infrastructure.memory import attach_project_memory
         attach_project_memory(task, self.memory)
         return task

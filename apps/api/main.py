@@ -63,7 +63,7 @@ class RevisionRequest(BaseModel):
 
 class ProjectMemoryRequest(BaseModel):
     key: str = Field(min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9_.-]+$")
-    kind: str = Field(pattern="^(architecture|convention|test_command)$")
+    kind: str = Field(pattern="^(architecture|convention|test_command|experience)$")
     content: str = Field(min_length=1, max_length=2000)
     source: str = Field(min_length=1, max_length=500)
     source_sha: str | None = Field(default=None, max_length=64)
