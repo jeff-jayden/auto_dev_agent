@@ -72,6 +72,34 @@ def test_embedding_failure_has_no_secret():
         assert "secret" not in str(failure.value)
 
 
+def test_code_rag_and_memory_can_use_different_embedding_services(monkeypatch, tmp_path):
+    from infrastructure.semantic_memory import SemanticMemoryIndex
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "qwen3.7-text-embedding")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "cloud-secret")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1024")
+    monkeypatch.setenv("MEMORY_EMBEDDING_PROVIDER", "ollama")
+    monkeypatch.setenv("MEMORY_EMBEDDING_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("MEMORY_EMBEDDING_MODEL", "embeddinggemma")
+    monkeypatch.setenv("MEMORY_EMBEDDING_TIMEOUT_SECONDS", "8")
+
+    code_embedding = EmbeddingClient.from_environment()
+    with patch("code_intelligence.vector_store.CodeVectorStore") as store:
+        store.return_value.client = object()
+        memory_embedding = SemanticMemoryIndex(tmp_path / "memory.db").embedding
+
+    assert (code_embedding.provider, code_embedding.model, code_embedding.dimensions) == (
+        "openai", "qwen3.7-text-embedding", 1024
+    )
+    assert code_embedding.api_key == "cloud-secret"
+    assert (memory_embedding.provider, memory_embedding.model, memory_embedding.timeout) == (
+        "ollama", "embeddinggemma", 8
+    )
+    assert memory_embedding.api_key == "" and memory_embedding.dimensions is None
+
+
 def test_index_updates_uncommitted_added_and_deleted_files(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -204,6 +204,23 @@ EMBEDDING_TIMEOUT_SECONDS=60
 
 也支持 `EMBEDDING_PROVIDER=openai` 的兼容 Embedding API，地址填写含 `/v1` 的根地址，密钥只设置到本地 `EMBEDDING_API_KEY`。与 DeepSeek 对话配置相互独立，不会自动把对话模型当作 Embedding 模型。接外部服务会发送代码块，应先确认仓库隐私要求。服务异常会明确报错，不静默退回旧检索。
 
+仅让代码 RAG 使用阿里云百炼、长期记忆继续使用本地模型时，可采用下面的隔离配置：
+
+```dotenv
+EMBEDDING_PROVIDER=openai
+EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_MODEL=qwen3.7-text-embedding
+EMBEDDING_API_KEY=仅放在本地未提交的 .env 中
+EMBEDDING_DIMENSIONS=1024
+
+MEMORY_EMBEDDING_PROVIDER=ollama
+MEMORY_EMBEDDING_BASE_URL=http://127.0.0.1:11434
+MEMORY_EMBEDDING_MODEL=embeddinggemma
+MEMORY_EMBEDDING_TIMEOUT_SECONDS=8
+```
+
+`MEMORY_EMBEDDING_*` 未配置时会兼容性回退到 `EMBEDDING_*`。配置后，代码块会发送给百炼，而任务长期记忆不会发送到云端。
+
 Chroma 在本机 `127.0.0.1:8001` **独立服务进程**运行，由 `scripts/start-chroma.ps1` 启动，数据存储在 `runtime/vectors`；API/Celery 通过 HTTP 访问，不并发直接写持久化目录。Redis 仍仅用于 Celery，与向量库无关。单进程 CLI/单元测试可不配 `RAG_CHROMA_URL` 使用内嵌模式；Celery 模式会强制检查该配置。需要 Docker 时可独立部署 Chroma 并替换服务地址，不必改 Agent 链路。
 
 按仓库、模型配置和内容快照隔离 collection；未提交文件修改、删除、新增也会更新索引。内容向量缓存复用未变化的块。历史快照保留用于并行和恢复任务，尚未自动清理；长期运行需安排保留策略。更换同名模型的权重时也应使用新的模型版本名或向量目录。

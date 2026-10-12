@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,8 +16,9 @@ class SemanticMemoryIndex:
     def __init__(self, database_path, *, embedding=None, client=None):
         from code_intelligence.embedding import EmbeddingClient
         from code_intelligence.vector_store import CodeVectorStore
-        self.embedding = embedding or replace(EmbeddingClient.from_environment(),
-                                               timeout=float(os.getenv("MEMORY_EMBEDDING_TIMEOUT_SECONDS", "8")))
+        self.embedding = embedding or EmbeddingClient.from_environment(
+            "MEMORY_EMBEDDING_", fallback_prefix="EMBEDDING_"
+        )
         self.client = client or CodeVectorStore(Path(database_path).parent / "memory_vectors", self.embedding,
             server_url=os.getenv("MEMORY_CHROMA_URL") or os.getenv("RAG_CHROMA_URL") or "http://127.0.0.1:8001").client
         self.namespace = hashlib.sha256(str(Path(database_path).resolve()).encode()).hexdigest()[:16]
@@ -63,8 +63,11 @@ def semantic_scores(database_path, repository_id, query, records, kind=""):
     if os.getenv("MEMORY_SEMANTIC_ENABLED", "false").lower() not in {"true", "1", "yes"}:
         return {}, "disabled"
     configuration = tuple(os.getenv(name, "") for name in (
-        "MEMORY_CHROMA_URL", "RAG_CHROMA_URL", "EMBEDDING_PROVIDER", "EMBEDDING_MODEL",
-        "EMBEDDING_BASE_URL", "EMBEDDING_DIMENSIONS", "MEMORY_EMBEDDING_TIMEOUT_SECONDS"))
+        "MEMORY_CHROMA_URL", "RAG_CHROMA_URL",
+        "MEMORY_EMBEDDING_PROVIDER", "MEMORY_EMBEDDING_MODEL",
+        "MEMORY_EMBEDDING_BASE_URL", "MEMORY_EMBEDDING_DIMENSIONS",
+        "MEMORY_EMBEDDING_TIMEOUT_SECONDS", "EMBEDDING_PROVIDER", "EMBEDDING_MODEL",
+        "EMBEDDING_BASE_URL", "EMBEDDING_DIMENSIONS", "EMBEDDING_TIMEOUT_SECONDS"))
     try:
         return configured_index(str(database_path), configuration).search(repository_id, query, records, kind), "ok"
     except Exception:

@@ -31,17 +31,40 @@ class EmbeddingClient:
             raise ValueError("Embedding 模型、超时或维度配置无效")
 
     @classmethod
-    def from_environment(cls) -> EmbeddingClient:
-        provider = os.getenv("EMBEDDING_PROVIDER", "ollama")
-        model = os.getenv("EMBEDDING_MODEL", "")
+    def from_environment(
+        cls, prefix: str = "EMBEDDING_", *, fallback_prefix: str | None = None
+    ) -> EmbeddingClient:
+        if not prefix.endswith("_") or (fallback_prefix and not fallback_prefix.endswith("_")):
+            raise ValueError("Embedding 环境变量前缀必须以 _ 结尾")
+
+        # 只要命名空间声明了服务身份，就视为独立配置，未填写的密钥/维度不从
+        # 其他服务继承。仅设置超时时仍允许旧配置按字段回退。
+        namespace_configured = any(
+            os.getenv(prefix + name) is not None
+            for name in ("PROVIDER", "MODEL", "BASE_URL", "API_KEY", "DIMENSIONS")
+        )
+
+        def configured(name: str, default: str = "") -> str:
+            value = os.getenv(prefix + name)
+            if value is not None:
+                return value
+            if fallback_prefix and not namespace_configured:
+                value = os.getenv(fallback_prefix + name)
+                if value is not None:
+                    return value
+            return default
+
+        provider = configured("PROVIDER", "ollama")
+        model = configured("MODEL")
         if not model:
-            raise ValueError("真实 RAG 需要配置 EMBEDDING_MODEL，不能使用对话模型代替")
+            raise ValueError(f"真实向量检索需要配置 {prefix}MODEL，不能使用对话模型代替")
+        dimensions = configured("DIMENSIONS")
         return cls(
             provider=provider, model=model,
-            base_url=os.getenv("EMBEDDING_BASE_URL", "http://127.0.0.1:11434" if provider == "ollama" else "https://api.openai.com/v1").rstrip("/"),
-            api_key=os.getenv("EMBEDDING_API_KEY", ""),
-            timeout=float(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "60")),
-            dimensions=int(os.environ["EMBEDDING_DIMENSIONS"]) if os.getenv("EMBEDDING_DIMENSIONS") else None,
+            base_url=configured("BASE_URL", "http://127.0.0.1:11434" if provider == "ollama" else "https://api.openai.com/v1").rstrip("/"),
+            api_key=configured("API_KEY"),
+            timeout=float(configured("TIMEOUT_SECONDS", "60")),
+            dimensions=int(dimensions) if dimensions else None,
         )
 
     @property
