@@ -180,7 +180,8 @@ CONTEXT_ROLE_ALIASES = {
 class RepositoryCodeIndex:
     """Persistent, Git-aware code index used to build explainable task context."""
 
-    def __init__(self, cache_root: Path | None = None, *, vector_store: CodeVectorStore | None = None):
+    def __init__(self, cache_root: Path | None = None, *, vector_store: CodeVectorStore | None = None,
+                 reranker=None, rerank_strategy: str = "rule"):
         """初始化仓库代码索引器。
 
         Args:
@@ -188,6 +189,12 @@ class RepositoryCodeIndex:
         """
         self.cache_root = cache_root.resolve() if cache_root else None
         self.vector_store = vector_store
+        if rerank_strategy not in {"rule", "model"}:
+            raise ValueError("RAG_RERANK_STRATEGY 只支持 rule / model")
+        if rerank_strategy == "model" and reranker is None:
+            raise ValueError("模型重排需要配置 Reranker")
+        self.reranker = reranker
+        self.rerank_strategy = rerank_strategy
         if self.cache_root:
             self.cache_root.mkdir(parents=True, exist_ok=True)
 
@@ -195,17 +202,23 @@ class RepositoryCodeIndex:
     def from_environment(cls, cache_root: Path | None = None):
         """显式启用真实 RAG；服务错误直接报告，不能静默冒充向量检索。"""
         mode = os.getenv("RAG_RETRIEVAL_MODE", "legacy")
+        strategy = os.getenv("RAG_RERANK_STRATEGY", "rule")
+        if strategy not in {"rule", "model"}:
+            raise ValueError("RAG_RERANK_STRATEGY 只支持 rule / model")
+        from code_intelligence.reranker import RerankerClient
+        reranker = RerankerClient.from_environment() if strategy == "model" else None
         if mode not in {"legacy", "embedding"}:
             raise ValueError("RAG_RETRIEVAL_MODE 只支持 legacy / embedding")
         if mode == "legacy":
-            return cls(cache_root)
+            return cls(cache_root, reranker=reranker, rerank_strategy=strategy)
         from code_intelligence.embedding import EmbeddingClient
         root = Path(os.getenv("RAG_VECTOR_ROOT", str((cache_root.parent if cache_root else Path("runtime")) / "vectors")))
         embedding = EmbeddingClient.from_environment()
         server_url = os.getenv("RAG_CHROMA_URL")
         if os.getenv("EXECUTION_BACKEND") == "celery" and not server_url:
             raise ValueError("Celery 多进程使用真实 RAG 时必须配置 RAG_CHROMA_URL，不能共享内嵌 Chroma 目录")
-        return cls(cache_root, vector_store=CodeVectorStore(root, embedding, server_url=server_url))
+        return cls(cache_root, vector_store=CodeVectorStore(root, embedding, server_url=server_url),
+                   reranker=reranker, rerank_strategy=strategy)
 
     @property
     def version(self) -> int:
@@ -362,7 +375,8 @@ class RepositoryCodeIndex:
             dependency_files=dependencies,
             test_files=tests,
             files=context_files,
-            retrieval_strategy="embedding_chroma_rrf_v1" if self.vector_store else "hybrid_rag_v1",
+            retrieval_strategy=("embedding_chroma_rrf_v1" if self.vector_store else "hybrid_rag_v1")
+                + (f"+reranker:{self.reranker.model}" if self.rerank_strategy == "model" else ""),
         ), evidence
 
     def _primary_files(self, records: dict, ranked: list[str], requirement: str) -> list[str]:
@@ -463,6 +477,8 @@ class RepositoryCodeIndex:
         *,
         limit: int | None = None,
         ranked_hits: list[dict] | None = None,
+        rerank_strategy: str | None = None,
+        candidate_limit: int | None = None,
     ) -> list[dict]:
         """扩大原始候选，沿代码关系补充文件，再按目标角色统一重排。
 
@@ -470,6 +486,16 @@ class RepositoryCodeIndex:
         对远程向量服务发起第二次相同查询。返回结果仍保留原始 RRF 理由与代码块证据。
         """
         records: dict[str, dict] = index.get("files", {})
+        strategy = rerank_strategy or self.rerank_strategy
+        if strategy not in {"rule", "model", "candidates"}:
+            raise ValueError("未知重排方式")
+        if strategy == "model" and self.reranker is None:
+            raise ValueError("模型重排需要配置 Reranker")
+        if limit is not None and limit < 1:
+            raise ValueError("重排 limit 必须为正整数")
+        pool_limit = candidate_limit or (self.reranker.candidate_limit if self.reranker else None)
+        if pool_limit is not None and (pool_limit < 1 or (limit and pool_limit < limit)):
+            raise ValueError("候选数不能小于 Top K")
         raw = ranked_hits if ranked_hits is not None else self.rank_files(index, requirement, strategy="hybrid")
         if not raw:
             return []
@@ -589,6 +615,12 @@ class RepositoryCodeIndex:
         if protected:
             anchor = next(item for item in result if item["path"] == protected)
             result = [anchor, *(item for item in result if item["path"] != protected)]
+        if pool_limit is not None:
+            result = result[:pool_limit]
+        if strategy == "candidates":
+            return result
+        if strategy == "model":
+            return self.rerank_candidates(index, requirement, result)[:limit]
         if limit is None:
             return result
         selected = result[:limit]
@@ -600,7 +632,8 @@ class RepositoryCodeIndex:
             len(raw),
             limit if limit <= 3 else max(1, math.ceil(limit * 0.6)),
         )
-        direct_paths = [item["path"] for item in raw[:direct_budget]]
+        available = {item["path"] for item in result}
+        direct_paths = [item["path"] for item in raw[:direct_budget] if item["path"] in available]
         selected_paths = {item["path"] for item in selected}
         for path in direct_paths:
             if path in selected_paths:
@@ -617,6 +650,31 @@ class RepositoryCodeIndex:
             selected_paths.add(path)
         result_order = {item["path"]: rank for rank, item in enumerate(result)}
         return sorted(selected, key=lambda item: result_order[item["path"]])
+
+    def rerank_candidates(self, index: dict, requirement: str, candidates: list[dict]) -> list[dict]:
+        """对同一候选池排序；仅发送路径、符号和有界代码证据，不发送标签或整仓库。"""
+        if self.reranker is None:
+            raise ValueError("模型重排需要配置 Reranker")
+        documents = []
+        for item in candidates:
+            record = index["files"][item["path"]]
+            header = f"File: {item['path']}\nSymbols: {', '.join(record.get('symbols', [])[:30])}\n"
+            # 优先命中块，再补文件头；去重并保留原始大小写，不用 search_text 的小写全文。
+            chunks = [*item.get("chunks", []), *record.get("chunks", [])]
+            seen, excerpts = set(), []
+            for chunk in chunks:
+                text = chunk.get("text", "")
+                if text and text not in seen:
+                    seen.add(text)
+                    excerpts.append(f"Lines {chunk.get('start_line', '?')}-{chunk.get('end_line', '?')}:\n{text}")
+                if sum(map(len, excerpts)) >= self.reranker.document_chars:
+                    break
+            documents.append((header + "\n".join(excerpts))[:self.reranker.document_chars])
+        scores = self.reranker.rank(requirement, documents)
+        return [{**candidates[i], "rule_score": candidates[i]["score"], "score": score,
+                 "rerank_model": self.reranker.model,
+                 "reasons": [*candidates[i].get("reasons", []), f"Reranker {self.reranker.model} 评分 {score:.6f}"]}
+                for i, score in scores]
 
     def _lexical_scores(
         self, records: dict[str, dict], requirement: str

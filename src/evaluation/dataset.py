@@ -438,6 +438,8 @@ class RagDatasetService:
                               for case in group]
                     result = evaluate_repository(snapshot, {"name": "human_confirmed", "cases": labels}, engine, request.k,
                                                  repository_identity=f"rag-evaluation:{repository_id}:{full_sha}", baseline_sha=full_sha)
+                    report["context_strategy"] = result.get("context_strategy", report["context_strategy"])
+                    report["reranker"] = result.get("reranker")
                 for case, detail in zip(group, result["cases"]):
                     detail.setdefault("baseline_context_files", detail["baseline_files"])
                     detail.setdefault("hybrid_context_files", detail["hybrid_files"])

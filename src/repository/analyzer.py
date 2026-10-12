@@ -59,6 +59,8 @@ class RepositoryAnalyzer:
             tool="code_index",
             arguments={"mode": index_mode, "version": context_pack.index_version,
                        "retrieval_strategy": context_pack.retrieval_strategy,
+                       "rerank_strategy": self.code_index.rerank_strategy,
+                       "reranker_model": self.code_index.reranker.model if self.code_index.reranker else None,
                        "embedding_model": self.code_index.vector_store.embedding.model if self.code_index.vector_store else None},
             summary=(
                 f"代码索引 {index_mode}，选择 {len(context_pack.primary_files)} 个核心文件、"

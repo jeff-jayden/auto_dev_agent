@@ -225,7 +225,58 @@ Chroma 在本机 `127.0.0.1:8001` **独立服务进程**运行，由 `scripts/st
 
 按仓库、模型配置和内容快照隔离 collection；未提交文件修改、删除、新增也会更新索引。内容向量缓存复用未变化的块。历史快照保留用于并行和恢复任务，尚未自动清理；长期运行需安排保留策略。更换同名模型的权重时也应使用新的模型版本名或向量目录。
 
-#### 真实仓库 A/B 评测
+#### Reranker 模型重排与成对评测
+
+在混合召回与依赖扩展后，可通过 `RAG_RERANK_STRATEGY=rule/model` 选择现有文件角色规则重排或真实 Reranker 模型重排。
+模型重排只接收有限候选的路径、符号、命中代码块及文件头，不接收标注答案、整仓库或任务会话。
+默认最多 24 个候选、每文件 3000 字符；评分保留在文件检索理由中，仓库分析工具审计记录实际模型。
+此 Top K 评测衡量排序结果，不等同于 Plan 最终使用的全部核心/依赖/测试上下文。
+
+百炼接入示例（真实密钥只配置在本地 `.env`；其他服务可用 `compatible` 协议并设置完整端点）：
+
+```dotenv
+RAG_RERANK_STRATEGY=model
+RERANK_PROVIDER=dashscope
+RERANK_ENDPOINT=https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+RERANK_MODEL=qwen3.7-text-rerank
+RERANK_API_KEY_ENV=EMBEDDING_API_KEY
+RERANK_CANDIDATE_LIMIT=24
+RERANK_DOCUMENT_CHARS=3000
+RERANK_TIMEOUT_SECONDS=60
+```
+
+`RERANK_API_KEY_ENV` 显式指定已有密钥变量，仅限同一供应商账号；也可直接设置独立的 `RERANK_API_KEY`。
+默认不自动继承其他模型凭证。模型 HTTP 错误、漏返回候选、重复索引或非有限评分均明确报错，不能静默回退后声称使用了模型。
+修改后重启 API 和 Celery Worker；设回 `rule` 可恢复原规则链路，不需要重建 Embedding。
+接口协议参考[百炼文本排序 API](https://help.aliyun.com/zh/model-studio/text-rerank-api)。
+
+在已加载 `.env` 的终端运行（评测不需要把生产策略切成 `model`）：
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m evaluation.retrieval --compare-rerank --repository E:/aiTraval/playground/cfe-unit --dataset src/evaluation/datasets/cfe_unit_resilience_rag_cases.json --k 5 --output runtime/evaluations/rerank-qwen-r101-r150-k5.json
+```
+
+对比固定同一混合召回、同一有界候选池和同一 Top K；规则使用原有角色评分、锚点保护及直接召回保留，模型使用相关性评分排序。
+标注包含 `repository_head_sha` 时，通过 `git archive` 导出对应临时快照，即使当前 HEAD 已变化或存在未提交代码，也不 checkout/reset 用户仓库。
+报告保存仓库 SHA、代码内容指纹、模型与候选预算、逐需求排序/评分、候选池 Recall、原始召回及两种重排指标与耗时。
+失败样本同时排除两组并显示覆盖数，评测非完整完成时 CLI 返回非零退出码。
+
+2026-10-13 实测：R101–R150 共 50 条需求，快照 `4233c53be18a9d80c2e6a13eecc9d112a84d6863`，
+Embedding 为 `qwen3.7-text-embedding`，Reranker 为 `qwen3.7-text-rerank`，24 候选、Top 5、50/50 成功：
+
+| 指标 | 原始混合召回 | 规则重排 | 模型重排 |
+| --- | ---: | ---: | ---: |
+| Recall@5 | 80.13% | 77.07% | 90.53% |
+| MRR | 72.17% | 68.07% | 89.67% |
+| Hit@5 | 90.00% | 88.00% | 96.00% |
+| 重排阶段平均耗时 | — | 4.39 ms | 364.26 ms |
+
+候选池 Recall 为 91.53%，模型比规则 Recall@5 提升 13.46 个百分点、MRR 提升 21.60 个百分点。
+建库预热与混合召回耗时单列，不计入重排阶段；模型重排耗时包括公共候选准备、文档构造和 HTTP 调用。
+该集为最终代码快照上的历史需求文件检索基准，不是开发前快照测试、独立泛化证明或端到端开发成功率；不可把结果外推为生产收益。
+
+#### Embedding 召回 A/B 评测
 
 在已设置上述环境变量的终端运行（命令行入口不会自行读取 `.env`）：
 

@@ -257,7 +257,8 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
     new_context = evaluator._metrics(context_rows, position=2).model_dump()
     return {"dataset": dataset.get("name", "custom"), "dataset_kind": "real_repository", "case_count": len(rows), "k": k,
             "baseline_strategy": "bm25f_hash_hybrid_v2", "hybrid_strategy": "embedding_chroma_rrf_v1",
-            "context_strategy": "expanded_dependency_role_rerank_v1",
+            "context_strategy": "model_rerank_v1" if indexer.rerank_strategy == "model" else "expanded_dependency_role_rerank_v1",
+            "reranker": indexer.reranker.metadata() if indexer.rerank_strategy == "model" else None,
             "repository": str(repository.resolve()), "head_sha": head,
             "content_fingerprint": hashlib.sha256(json.dumps([(p, r["hash"]) for p, r in sorted(index["files"].items())]).encode()).hexdigest(),
             "embedding_model": indexer.vector_store.embedding.model,
@@ -273,6 +274,104 @@ def evaluate_repository(repository: Path, dataset: dict, indexer: RepositoryCode
             "limitations": "文件级标注集；不是功能成功率或人工验收结论。首个查询预热成本记入 indexing_ms。小样本结果不能外推生产收益。"}
 
 
+def evaluate_rerankers(repository: Path, dataset: dict, indexer: RepositoryCodeIndex,
+                       k: int = 5, *, progress=None, baseline_sha: str | None = None,
+                       repository_identity: str | None = None) -> dict:
+    """固定真实混合召回及候选池，成对对比规则与模型重排；标签只用于计分。"""
+    from repository.analyzer import RepositoryAnalyzer
+    if indexer.vector_store is None or indexer.reranker is None:
+        raise ValueError("重排评测需要真实 Embedding、Chroma 和 Reranker")
+    if not dataset.get("cases") or not 1 <= k <= indexer.reranker.candidate_limit:
+        raise ValueError("重排评测需要非空标签且 Top K 不能大于候选数")
+    expected_head = dataset.get("repository_head_sha")
+    if expected_head and baseline_sha is None:
+        # 即便当前 HEAD 相同也导出，排除未提交文件污染；不 checkout/reset 用户仓库。
+        import io
+        import subprocess
+        import tarfile
+        import tempfile
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
+            raise ValueError("标注快照必须使用完整 Git SHA")
+        archive = subprocess.run(["git", "archive", "--format=tar", expected_head], cwd=repository,
+                                 capture_output=True, timeout=60, check=False)
+        if archive.returncode:
+            raise ValueError("无法导出标注对应 Git 快照")
+        with tempfile.TemporaryDirectory(prefix="rag-rerank-") as directory:
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+                tar.extractall(directory, members=[m for m in tar.getmembers() if m.isfile() or m.isdir()], filter="data")
+            return evaluate_rerankers(Path(directory), dataset, indexer, k, progress=progress,
+                                     baseline_sha=expected_head, repository_identity=str(repository.resolve()))
+    head = baseline_sha or RepositoryAnalyzer._git(repository, "rev-parse", "HEAD")
+    if expected_head and head != expected_head:
+        raise ValueError("评测快照与标注不一致")
+    index, mode, _ = indexer.build(repository, RepositoryAnalyzer._list_files(repository), head)
+    if repository_identity:
+        index = {**index, "repository": repository_identity}
+    for case in dataset["cases"]:
+        if (not case.get("query", "").strip() or not case.get("expected_files")
+                or not set(case["expected_files"]) <= set(index["files"])):
+            raise ValueError(f"标注无效或文件不在当前快照：{case.get('name', '')}")
+    started = perf_counter()
+    indexer.vector_store.search(index, dataset["cases"][0]["query"], k=1)
+    indexing_ms = (perf_counter() - started) * 1000
+    rows, raw_rows, pool_rows, details, errors = [], [], [], [], []
+    timing = {"retrieval": [], "rule": [], "model": []}
+    for number, case in enumerate(dataset["cases"], 1):
+        try:
+            started = perf_counter()
+            raw = indexer.rank_files(index, case["query"], strategy="hybrid")
+            raw_ms = (perf_counter() - started) * 1000
+            started = perf_counter()
+            pool = indexer.rank_context_files(index, case["query"], limit=k, ranked_hits=raw,
+                                             rerank_strategy="candidates")
+            pool_ms = (perf_counter() - started) * 1000
+            started = perf_counter()
+            rule = indexer.rank_context_files(index, case["query"], limit=k, ranked_hits=raw,
+                                             rerank_strategy="rule")
+            rule_ms = (perf_counter() - started) * 1000
+            started = perf_counter()
+            model = indexer.rerank_candidates(index, case["query"], pool)[:k]
+            model_ms = pool_ms + (perf_counter() - started) * 1000
+            label = RetrievalCase(case.get("name", case["query"]), case["query"],
+                                  tuple(case["expected_files"]), {})
+            paths = lambda hits: [item["path"] for item in hits]
+            rows.append((label, paths(rule), paths(model)))
+            raw_rows.append((label, paths(raw[:k]), paths(raw[:k])))
+            pool_rows.append((label, paths(pool), paths(pool)))
+            for name, value in (("retrieval", raw_ms), ("rule", rule_ms), ("model", model_ms)):
+                timing[name].append(value)
+            details.append({"name": label.name, "query": case["query"],
+                            "expected_files": case["expected_files"], "candidate_files": paths(pool),
+                            "raw_files": paths(raw[:k]), "rule_files": paths(rule), "model_files": paths(model),
+                            "model_scores": [{"path": item["path"], "score": item["score"]} for item in model],
+                            "timing_ms": {"retrieval": round(raw_ms, 2), "rule": round(rule_ms, 2), "model": round(model_ms, 2)}})
+        except (RuntimeError, ValueError) as error:
+            errors.append({"name": case.get("name"), "error": str(error)})
+        if progress:
+            progress(number, len(dataset["cases"]), len(errors))
+    evaluator = RetrievalEvaluator(k=k)
+    rule_metrics = evaluator._metrics(rows, position=1).model_dump() if rows else None
+    model_metrics = evaluator._metrics(rows, position=2).model_dump() if rows else None
+    return {"dataset": dataset.get("name"), "dataset_kind": "reranker_paired_comparison",
+            "status": "completed" if not errors else "partial" if rows else "failed",
+            "requested_count": len(dataset["cases"]), "evaluated_count": len(rows), "k": k,
+            "repository": repository_identity or str(repository.resolve()), "head_sha": head, "index_mode": mode,
+            "content_fingerprint": hashlib.sha256(json.dumps(
+                [(p, r["hash"]) for p, r in sorted(index["files"].items())]).encode()).hexdigest(),
+            "embedding_model": indexer.vector_store.embedding.model,
+            "embedding_signature": indexer.vector_store.embedding.signature,
+            "reranker": indexer.reranker.metadata(),
+            "rule_strategy": "expanded_dependency_role_rerank_v1", "model_strategy": "model_rerank_v1",
+            "raw": evaluator._metrics(raw_rows, position=1).model_dump() if rows else None,
+            "candidate_pool_recall": RetrievalEvaluator(k=indexer.reranker.candidate_limit)._metrics(pool_rows, position=1).recall_at_k if rows else None,
+            "rule": rule_metrics, "model": model_metrics,
+            "delta": {key: round(model_metrics[key] - rule_metrics[key], 2) for key in rule_metrics} if rows else None,
+            "indexing_ms": round(indexing_ms, 2),
+            "average_ms": {key: round(sum(values) / len(values), 2) if values else None for key, values in timing.items()},
+            "cases": details, "errors": errors,
+            "limitations": "同一候选池的成对宏平均；失败样本同时排除两组并报告覆盖数。标签未传给模型。最终代码快照检索不代表开发前召回或需求交付成功率；非独立留出集不得作为泛化结论。"}
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="真实代码仓库 RAG A/B 评测（调用 Embedding 服务）")
@@ -280,11 +379,21 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("runtime/evaluations/rag-ab.json"))
     parser.add_argument("--k", type=int, default=3)
+    parser.add_argument("--compare-rerank", action="store_true", help="固定混合召回，对比规则与 Reranker 模型")
     arguments = parser.parse_args()
     data = json.loads(arguments.dataset.read_text(encoding="utf-8"))
     engine = RepositoryCodeIndex.from_environment(Path("runtime/indexes"))
-    report = evaluate_repository(arguments.repository.resolve(), data, engine, arguments.k)
+    if arguments.compare_rerank:
+        from code_intelligence.reranker import RerankerClient
+        engine.reranker = RerankerClient.from_environment()
+        report = evaluate_rerankers(arguments.repository.resolve(), data, engine, arguments.k,
+                                   progress=lambda done, total, errors: print(f"评测 {done}/{total}，失败 {errors}", flush=True))
+    else:
+        report = evaluate_repository(arguments.repository.resolve(), data, engine, arguments.k)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({key: report[key] for key in ("case_count", "baseline", "hybrid", "delta", "average_query_ms")}, ensure_ascii=False, indent=2))
+    summary_keys = ("status", "evaluated_count", "rule", "model", "delta", "average_ms") if arguments.compare_rerank else ("case_count", "baseline", "hybrid", "delta", "average_query_ms")
+    print(json.dumps({key: report[key] for key in summary_keys}, ensure_ascii=False, indent=2))
     print(f"评测报告：{arguments.output.resolve()}")
+    if arguments.compare_rerank and report["status"] != "completed":
+        raise SystemExit(1)
