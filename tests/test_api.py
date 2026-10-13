@@ -84,7 +84,68 @@ assert.equal(element.scrollTop, 1000);
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_initial_page_load_does_not_wait_for_lists():
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed for frontend assertions")
+    script = r'''
+const fs = require('fs'), assert = require('assert/strict');
+const source = fs.readFileSync('apps/web/assets/app.js', 'utf8');
+function load(name) {
+  const start = source.indexOf(`async function ${name}(`);
+  return source.slice(start, source.indexOf('\n}', start) + 2);
+}
+(async () => {
+  const calls = [];
+  let finishRepositories, finishTasks;
+  const loadRepositories = () => { calls.push('repositories'); return new Promise(resolve => finishRepositories = resolve); };
+  const refreshTaskList = () => { calls.push('list'); return new Promise(resolve => finishTasks = resolve); };
+  const localStorage = {getItem: () => 'saved-task'};
+  const selectTask = async id => { assert.equal(id, 'saved-task'); calls.push('selected'); };
+  const notify = () => {}, setView = () => {}, renderTaskList = () => {};
+  let currentTask = null;
+  eval(load('initialize'));
+  const pending = initialize();
+  await Promise.resolve();
+  assert.deepEqual(calls, ['repositories', 'list', 'selected']);
+  finishRepositories(); finishTasks(); await pending;
+})();
+'''
+    result = subprocess.run([node], input=script, text=True, capture_output=True,
+                            cwd=Path(__file__).resolve().parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 class ApiTests(unittest.TestCase):
+    def test_page_reads_do_not_retrieve_memory_or_diagnose_entire_list(self):
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = build_orchestrator(Path(directory) / "runtime")
+            task = isolated.create_task("页面快速加载", "仅验证读取任务列表与详情时不执行额外的模型检索。")
+            with patch.object(main, "orchestrator", isolated), \
+                    patch.object(main.execution_worker, "start"), \
+                    patch.object(main.execution_worker, "stop"):
+                with TestClient(main.app) as client, \
+                        patch.object(isolated.store.memory, "context_records", side_effect=AssertionError("页面不能检索记忆")), \
+                        patch.object(main.RecoveryCoordinator, "diagnose", side_effect=AssertionError("列表不能深度诊断")):
+                    response = client.get("/api/tasks")
+                    self.assertEqual(response.status_code, 200)
+                    summary = response.json()[0]
+                    self.assertEqual(summary["id"], task.id)
+                    self.assertNotIn("result", summary)
+                    self.assertNotIn("development_attempts", summary)
+                    self.assertNotIn("technical_plan", summary)
+                    for suffix in ("", "/events", "/progress", "/jobs", "/checkpoints", "/traces", "/diff-files"):
+                        self.assertEqual(client.get(f"/api/tasks/{task.id}{suffix}").status_code, 200)
+                    self.assertIsNotNone(client.get(f"/api/tasks/{task.id}").json()["technical_plan"])
+                with patch.object(isolated.store.memory, "context_records", return_value=[]) as memory:
+                    isolated.store.get_task(task.id)
+                    memory.assert_called_once()  # Agent 默认读取仍可取最新记忆。
+                with patch.object(isolated.store.memory, "context_records", side_effect=AssertionError("诊断不能检索记忆")):
+                    self.assertEqual(main.RecoveryCoordinator(isolated).diagnose(task.id).status, "healthy")
+
     def test_api_flow(self):
         with tempfile.TemporaryDirectory() as directory:
             isolated = build_orchestrator(Path(directory) / "runtime")

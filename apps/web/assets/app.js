@@ -503,6 +503,11 @@ function renderUIAcceptance(task) {
 
 async function refreshTaskList() {
   knownTasks = await api("/api/tasks");
+  // 列表是轻量摘要；并行加载时不覆盖已取得的当前任务详情与恢复状态。
+  if (currentTask) {
+    const index = knownTasks.findIndex((task) => task.id === currentTask.id);
+    if (index >= 0) knownTasks[index] = currentTask;
+  }
   renderTaskList();
   return knownTasks;
 }
@@ -1668,16 +1673,25 @@ $("#merge-pr-button").addEventListener("click", async () => {
   finally { button.disabled = false; button.innerHTML = "确认合入 <b>→</b>"; }
 });
 async function initialize() {
-  await loadRepositories();
-  await refreshTaskList();
+  const backgroundLoads = [
+    loadRepositories().catch((error) => notify(`仓库列表加载失败：${error.message}`)),
+    refreshTaskList().catch((error) => notify(`任务列表加载失败：${error.message}`)),
+  ];
   const savedTaskId = localStorage.getItem("ai-dev-agent-current-task");
   if (savedTaskId) {
-    try { await selectTask(savedTaskId); return; }
-    catch (_error) { localStorage.removeItem("ai-dev-agent-current-task"); }
+    try {
+      await selectTask(savedTaskId);
+      await Promise.all(backgroundLoads);
+      return;
+    } catch (error) {
+      // 网络错误不应丢失用户上次选择。
+      notify(`当前任务加载失败：${error.message}`);
+    }
   }
   currentTask = null;
   setView("requirement");
   renderTaskList();
+  await Promise.all(backgroundLoads);
 }
 
 initialize().catch((error) => notify(error.message));

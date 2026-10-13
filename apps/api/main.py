@@ -265,18 +265,12 @@ def analyze_repository(repository_id: str, requirement: str = ""):
 
 @app.get("/api/tasks")
 def list_tasks():
-    coordinator = RecoveryCoordinator(orchestrator)
-    result = []
-    for task in orchestrator.store.list_tasks():
-        item = task.model_dump(mode="json")
-        item["recovery"] = coordinator.diagnose(task.id).model_dump(mode="json")
-        result.append(item)
-    return result
+    return orchestrator.store.list_task_summaries()
 
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
-    task = orchestrator.store.get_task(task_id)
+    task = orchestrator.store.get_task(task_id, include_memory=False)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
@@ -284,7 +278,7 @@ def get_task(task_id: str):
 
 @app.get("/api/tasks/{task_id}/diff-files")
 def get_task_diff_files(task_id: str):
-    task = orchestrator.store.get_task(task_id)
+    task = orchestrator.store.get_task(task_id, include_memory=False)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {
@@ -298,7 +292,7 @@ def get_task_diff_files(task_id: str):
 
 @app.get("/api/tasks/{task_id}/events")
 def get_events(task_id: str):
-    if orchestrator.store.get_task(task_id) is None:
+    if orchestrator.store.get_task(task_id, include_memory=False) is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return orchestrator.store.list_events(task_id)
 
@@ -306,7 +300,7 @@ def get_events(task_id: str):
 @app.get("/api/tasks/{task_id}/progress")
 def get_task_progress(task_id: str):
     """Return the live execution projection used by the development workspace."""
-    task = orchestrator.store.get_task(task_id)
+    task = orchestrator.store.get_task(task_id, include_memory=False)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     jobs = orchestrator.store.list_jobs(task_id)
@@ -403,14 +397,14 @@ def resume_job(job_id: str, request: DecisionRequest):
 
 @app.get("/api/tasks/{task_id}/jobs")
 def list_task_jobs(task_id: str):
-    if orchestrator.store.get_task(task_id) is None:
+    if orchestrator.store.get_task(task_id, include_memory=False) is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return orchestrator.store.list_jobs(task_id)
 
 
 @app.get("/api/tasks/{task_id}/checkpoints")
 def list_task_checkpoints(task_id: str):
-    if orchestrator.store.get_task(task_id) is None:
+    if orchestrator.store.get_task(task_id, include_memory=False) is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return orchestrator.store.list_checkpoints(task_id)
 
@@ -427,7 +421,7 @@ def replay_checkpoint(task_id: str, checkpoint_id: str):
 
 @app.get("/api/tasks/{task_id}/traces")
 def list_task_traces(task_id: str):
-    if orchestrator.store.get_task(task_id) is None:
+    if orchestrator.store.get_task(task_id, include_memory=False) is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return orchestrator.store.list_traces(task_id)
 

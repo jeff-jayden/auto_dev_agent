@@ -42,7 +42,7 @@ class RecoveryCoordinator:
         self.orchestrator = orchestrator
 
     def diagnose(self, task_id: str) -> RecoveryReport:
-        task = self.orchestrator.store.get_task(task_id)
+        task = self.orchestrator.store.get_task(task_id, include_memory=False)
         if task is None:
             raise KeyError(task_id)
 

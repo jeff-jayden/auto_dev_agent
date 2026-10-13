@@ -281,7 +281,7 @@ class SQLiteTaskStore:
         WorkingMemoryCache(str(self.database_path.resolve())).invalidate(task.id, old_revision)
         return task
 
-    def get_task(self, task_id: str) -> Task | None:
+    def get_task(self, task_id: str, *, include_memory: bool = True) -> Task | None:
         """按任务 ID 查询最新任务快照。
 
         Args:
@@ -297,7 +297,8 @@ class SQLiteTaskStore:
         task = Task.model_validate_json(row["data"])
         task.metadata["task_revision"] = row["revision"]
         from infrastructure.memory import attach_project_memory
-        attach_project_memory(task, self.memory)
+        if include_memory:
+            attach_project_memory(task, self.memory)
         return task
 
     def list_tasks(self) -> list[Task]:
@@ -305,6 +306,23 @@ class SQLiteTaskStore:
         with self._connect() as connection:
             rows = connection.execute("SELECT data FROM tasks ORDER BY created_at DESC").fetchall()
         return [Task.model_validate_json(row["data"]) for row in rows]
+
+    def list_task_summaries(self) -> list[dict]:
+        """列表只投影必要字段，不加载完整日志、Diff、记忆或执行恢复诊断。"""
+        with self._connect() as connection:
+            rows = connection.execute("""
+                SELECT id, json_extract(data, '$.title') AS title,
+                       substr(json_extract(data, '$.requirement'), 1, 400) AS requirement,
+                       json_extract(data, '$.status') AS status,
+                       json_extract(data, '$.repository_id') AS repository_id,
+                       json_extract(data, '$.created_at') AS created_at,
+                       json_extract(data, '$.updated_at') AS updated_at,
+                       json_extract(data, '$.metadata.followup_of') AS followup_of
+                FROM tasks ORDER BY created_at DESC
+            """).fetchall()
+        return [{key: row[key] for key in ("id", "title", "requirement", "status",
+                                          "repository_id", "created_at", "updated_at")}
+                | {"metadata": {"followup_of": row["followup_of"]}} for row in rows]
 
     def add_event(self, event: TaskEvent) -> TaskEvent:
         """追加一条不可变的任务事件。
