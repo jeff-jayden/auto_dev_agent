@@ -179,7 +179,7 @@ class GitHubDeliveryService:
         decision = latest.decision if latest else "not_run"
         return (
             f"<!-- ai-dev-agent-review:{task.id} -->\n"
-            "## AI Dev Agent Code Review\n\n"
+            "## DevRelay Code Review\n\n"
             f"- Decision: **{decision}**\n"
             f"- Test: `{task.merge_request.test_summary}`\n\n"
             f"### Findings\n\n{detail}"

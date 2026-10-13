@@ -144,7 +144,7 @@ elif execution_backend == "local":
     execution_worker = TaskExecutionWorker(lambda: orchestrator)
 else:
     raise RuntimeError("EXECUTION_BACKEND must be 'local' or 'celery'")
-app = FastAPI(title="AI Dev Agent", version="0.1.0")
+app = FastAPI(title="DevRelay —— 基于多 Agent 的自动化研发平台", version="0.1.0")
 web_root = PROJECT_ROOT / "apps" / "web"
 app.mount("/assets", StaticFiles(directory=web_root / "assets"), name="assets")
 

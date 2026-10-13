@@ -1,4 +1,4 @@
-# AI Dev Agent
+# DevRelay —— 基于多 Agent 的自动化研发平台
 
 _一个可暂停、可恢复、可审计，并由人工 Gate 控制最终交付的软件研发 Agent 平台。_
 
@@ -6,7 +6,7 @@ _一个可暂停、可恢复、可审计，并由人工 Gate 控制最终交付�
 
 ## 📋 项目定位
 
-AI Dev Agent 把一条真实的软件需求拆成可控的交付流程：读取仓库、分析需求、生成技术方案、隔离开发、执行测试、代码审查、创建 GitHub Pull Request，最终由用户决定是否合入。
+DevRelay 把一条真实的软件需求拆成可控的交付流程：读取仓库、分析需求、生成技术方案、隔离开发、执行测试、代码审查、创建 GitHub Pull Request，最终由用户决定是否合入。
 
 它不是“让模型一次性生成代码”的 Demo，而是一套围绕 Agent 构建的研发工作台：**模型负责理解、决策和生成，LangGraph 负责流程编排，确定性工具负责执行，人工审批负责关键边界**。
 
@@ -46,7 +46,7 @@ AI Dev Agent 把一条真实的软件需求拆成可控的交付流程：读取�
 
 ```mermaid
 flowchart LR
-    accTitle: AI Dev Agent 交付流程
+    accTitle: DevRelay 交付流程
     accDescr: 展示需求从仓库检索和技术方案开始，经过人工审批、开发测试与代码审查，最终发布并合入 GitHub Pull Request 的完整链路
 
     requirement([📋 创建需求]) --> context[🔍 检索仓库上下文]
@@ -84,7 +84,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    accTitle: AI Dev Agent 系统架构
+    accTitle: DevRelay 系统架构
     accDescr: 展示 FastAPI 保存业务 Job 后经 Redis 分发到独立 Celery Worker，再由 LangGraph 按顺序调用 Agent 和 Git 工作区的流程
 
     web([👤 Web 工作台]) --> api[🌐 FastAPI]
