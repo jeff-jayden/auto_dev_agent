@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DevRelay —— 基于多 Agent 的自动化研发平台</title>
-    <link rel="stylesheet" href="/assets/app.css?v=38" />
+    <link rel="stylesheet" href="/assets/app.css?v=39" />
     <link rel="stylesheet" href="/assets/rag.css?v=1" />
   </head>
   <body>
@@ -33,25 +33,38 @@
         <div class="workspace">
           <section id="create-view" class="workspace-view hidden">
             <div class="create-workspace">
-              <div class="create-intro"><span class="eyebrow">NEW TASK</span><h2>从一个清晰需求开始</h2><p>选择代码仓库并描述预期行为。Agent 会先生成需求分析和技术方案，经过你的批准后才进入开发。</p><button type="button" class="secondary" id="cancel-create-button">← 返回任务列表</button></div>
+              <div class="create-intro">
+                <button type="button" class="secondary create-back" id="cancel-create-button">← 返回任务列表</button>
+                <span class="create-kicker">DEVRELAY / 新建任务</span>
+                <h2>从一个清晰的<br />需求开始。</h2>
+                <p>描述你想实现的功能。先确认方案，再让 Agent 开始开发。</p>
+                <ol class="create-steps" aria-label="需求交付流程">
+                  <li><span>01</span><div><b>描述目标</b><small>选择仓库，写清预期与边界</small></div></li>
+                  <li><span>02</span><div><b>确认方案</b><small>检查影响文件与验收标准</small></div></li>
+                  <li><span>03</span><div><b>开发与审查</b><small>跟踪修改、测试和交付结果</small></div></li>
+                </ol>
+                <p class="create-assurance"><span aria-hidden="true">✓</span> 方案批准前，不会开始修改代码。</p>
+              </div>
               <section id="create-panel" class="panel create-panel">
+                <header class="create-panel-heading"><div><span class="create-section-label">任务信息</span><h2>这次想实现什么？</h2></div><span class="create-plan-badge">先规划，后开发</span></header>
                 <form id="task-form">
-                  <label>目标仓库<select id="repository" required></select></label>
-                  <label>任务标题<input id="title" placeholder="简要描述本次需求" required /></label>
-                  <label>需求描述<textarea id="requirement" rows="7" placeholder="说明预期行为、验收标准和限制条件" required></textarea></label>
+                  <label>目标仓库<select id="repository" required aria-describedby="repository-hint"></select><small class="create-field-hint" id="repository-hint">选择已有仓库，或在下方接入新仓库。</small></label>
+                  <label>任务标题<input id="title" placeholder="例如：为 Your Videos 页面增加分类切换" required /></label>
+                  <label class="create-requirement-field">需求描述<textarea id="requirement" rows="6" placeholder="我希望实现…&#10;完成标准：…&#10;需要保留或注意：…" required aria-describedby="requirement-hint"></textarea><small class="create-field-hint" id="requirement-hint">写清预期行为、验收标准，以及不希望改变的现有功能。</small></label>
                   <details class="design-inputs">
-                    <summary>关联 Figma 设计稿（可选）</summary>
+                    <summary>关联设计稿与页面验收 <span class="create-optional">可选</span></summary>
                     <label>Figma Frame 链接<input id="figma-url" placeholder="https://www.figma.com/design/...?...&node-id=1-2" /></label>
                     <label>实现页面预览地址<input id="preview-url" placeholder="http://127.0.0.1:3000/shorts" /></label>
                     <div class="viewport-inputs"><label>视口宽度<input id="viewport-width" type="number" min="320" max="3840" value="1440" /></label><label>视口高度<input id="viewport-height" type="number" min="320" max="2160" value="900" /></label></div>
                     <small>填写 Figma 链接后会通过 MCP 固定设计基线；填写预览地址后，开发完成会自动执行浏览器截图验收。</small>
                   </details>
-                  <button type="submit" id="create-button">生成需求分析与技术方案 <b>→</b></button>
+                  <div class="create-submit-area"><button type="submit" id="create-button">生成需求分析与技术方案 <b>→</b></button><p>生成后可先查看并调整方案，再批准开发。</p></div>
                 </form>
-                <details class="repo-register" open>
-                  <summary>添加 GitHub 仓库</summary>
+                <details class="repo-register">
+                  <summary>接入新仓库 <span class="create-optional">GitHub / 本地 Git</span></summary>
+                  <p class="create-field-hint">已有仓库可直接在上方选择，无需重复添加。</p>
                   <div class="repo-register-grid"><label class="repo-url-field">GitHub 仓库地址<input id="repo-url" placeholder="https://github.com/owner/repository.git" /></label><label>显示名称（可选）<input id="repo-name" placeholder="默认使用仓库名称" /></label></div>
-                  <button type="button" id="register-remote-button">连接并添加仓库</button>
+                  <button type="button" class="secondary" id="register-remote-button">连接并添加仓库</button>
                   <details class="local-repo-register"><summary>高级：使用本地仓库文件夹</summary><label>本地文件夹<div class="folder-input"><input id="repo-path" readonly placeholder="请选择 Git 仓库文件夹" /><button type="button" class="secondary" id="open-folder-picker-button">选择文件夹</button></div></label><button type="button" class="secondary" id="register-local-button">添加本地仓库</button></details>
                 </details>
               </section>
