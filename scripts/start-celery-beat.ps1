@@ -20,4 +20,7 @@ foreach ($rawLine in Get-Content -LiteralPath $environmentFile) {
 $env:PYTHONPATH = "src"
 $env:EXECUTION_BACKEND = "celery"
 Set-Location -LiteralPath $projectRoot
-python -m celery -A execution.celery_app:celery_app beat --loglevel=INFO
+$scheduleDirectory = Join-Path $projectRoot "runtime\celery"
+New-Item -ItemType Directory -Path $scheduleDirectory -Force | Out-Null
+$scheduleFile = Join-Path $scheduleDirectory "celerybeat-schedule"
+python -m celery -A execution.celery_app:celery_app beat --loglevel=INFO --schedule $scheduleFile
