@@ -82,7 +82,7 @@ flowchart LR
 
 ## ⚙️ 系统架构
 
-系统采用“Web/API + Redis/Celery + LangGraph 状态机 + Agent/Tool + Git 工作区”的分层设计。`TaskOrchestrator` 只负责命令入口和依赖适配，下一步执行哪个节点由 `TaskDeliveryGraph` 及其条件边决定。Celery 只负责分发和执行 Job，不替代 LangGraph 的业务状态与检查点。
+系统采用“Web/API + Redis/Celery + LangGraph 状态机 + Agent/Tool + Git 工作区”的分层设计。`TaskOrchestrator` 负责命令入口、交付图构建和业务节点适配，下一步执行哪个节点由其内部 LangGraph 条件边决定；`WorkflowStateStore` 独立管理持久化状态与检查点。Celery 只负责分发和执行 Job，不替代 LangGraph 的业务状态与检查点。
 
 ```mermaid
 flowchart TB
@@ -500,7 +500,7 @@ ai-dev-agent/
 关键入口：
 
 - `apps/api/main.py`：启动服务并构造所有依赖
-- `src/workflows/workflow_graph.py`：唯一业务状态源与顶层交付图
+- `src/workflows/workflow_state.py`：工作流状态源、合法状态转换与持久化检查点；顶层交付图在 `orchestrator.py` 中构建
 - `src/workflows/orchestrator.py`：把 API/Worker 命令适配为 Graph 输入
 - `src/execution/worker.py`：异步执行 Job 并维护心跳租约
 - `src/execution/celery_app.py`：将 Job 分发到 Celery 队列并执行定时恢复

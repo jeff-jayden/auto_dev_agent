@@ -5,7 +5,7 @@
     {"name": "github_publish", "query": "将开发完成的修改推送到远端并创建 Pull Request", "expected_files": ["src/scm/publisher.py", "src/scm/github.py"]},
     {"name": "repository_context", "query": "分析仓库框架和测试命令，选择本次需求的上下文文件", "expected_files": ["src/repository/analyzer.py", "src/code_intelligence/indexer.py"]},
     {"name": "safe_tools", "query": "限制工具读写范围并禁止访问密钥文件", "expected_files": ["src/tools/policy.py", "src/tools/developer_toolkit.py"]},
-    {"name": "pause_resume", "query": "用户暂停开发后根据持久化检查点继续运行", "expected_files": ["src/workflows/recovery.py", "src/workflows/workflow_graph.py"]},
+    {"name": "pause_resume", "query": "用户暂停开发后根据持久化检查点继续运行", "expected_files": ["src/workflows/recovery.py", "src/workflows/workflow_state.py"]},
     {"name": "review_findings", "query": "检查代码修改是否满足验收标准并生成阻塞审查意见", "expected_files": ["src/agents/code_review_agent.py"]},
     {"name": "worktree_isolation", "query": "为每个需求建立独立 Git 工作目录，避免修改原始仓库", "expected_files": ["src/sandbox/workspace.py"]},
     {"name": "trace_tokens", "query": "记录模型调用耗时 token 消耗并隐藏敏感信息", "expected_files": ["src/observability/tracing.py"]}

@@ -1,10 +1,10 @@
 import unittest
 
 from domain.models import Task, TaskStatus
-from workflows.workflow_graph import TaskDeliveryGraph
+from workflows.orchestrator import TaskOrchestrator
 
 
-class FakeDeliveryAdapter:
+class FakeDeliveryOrchestrator(TaskOrchestrator):
     def __init__(self, stop_after_development: TaskStatus | None = None):
         self.calls = []
         self.stop_after_development = stop_after_development
@@ -15,6 +15,8 @@ class FakeDeliveryAdapter:
             status=TaskStatus.WAITING_REQUIREMENT_APPROVAL,
         )
         self.repository = object()
+        self.tracer = None
+        self.delivery_graph = self._build_delivery_graph()
 
     def _graph_create_task(self, state):
         self.calls.append("create_task")
@@ -57,11 +59,11 @@ class FakeDeliveryAdapter:
         return {"task": self.task}
 
 
-class TaskDeliveryGraphTests(unittest.TestCase):
+class OrchestratorDeliveryGraphTests(unittest.TestCase):
     def test_creation_routes_through_repository_analysis_and_planner(self):
-        adapter = FakeDeliveryAdapter()
+        adapter = FakeDeliveryOrchestrator()
 
-        task = TaskDeliveryGraph(adapter).create(
+        task = adapter.create_task(
             title="Create with graph",
             requirement="Analyze the repository and make a plan",
             repository_id="demo",
@@ -71,9 +73,9 @@ class TaskDeliveryGraphTests(unittest.TestCase):
         self.assertEqual(task.status, TaskStatus.WAITING_REQUIREMENT_APPROVAL)
 
     def test_approval_routes_through_developer_mr_and_reviewer(self):
-        adapter = FakeDeliveryAdapter()
+        adapter = FakeDeliveryOrchestrator()
 
-        task = TaskDeliveryGraph(adapter).approve(task_id=adapter.task.id, actor="tester")
+        task = adapter.approve(task_id=adapter.task.id, actor="tester")
 
         self.assertEqual(
             adapter.calls,
@@ -82,18 +84,18 @@ class TaskDeliveryGraphTests(unittest.TestCase):
         self.assertEqual(task.status, TaskStatus.WAITING_RELEASE_APPROVAL)
 
     def test_risk_gate_stops_graph_before_mr_and_review(self):
-        adapter = FakeDeliveryAdapter(TaskStatus.WAITING_RISK_APPROVAL)
+        adapter = FakeDeliveryOrchestrator(TaskStatus.WAITING_RISK_APPROVAL)
 
-        task = TaskDeliveryGraph(adapter).approve(task_id=adapter.task.id, actor="tester")
+        task = adapter.approve(task_id=adapter.task.id, actor="tester")
 
         self.assertEqual(adapter.calls, ["approve_plan", "develop"])
         self.assertEqual(task.status, TaskStatus.WAITING_RISK_APPROVAL)
 
     def test_manual_review_of_ready_change_generates_mr_before_review(self):
-        adapter = FakeDeliveryAdapter()
+        adapter = FakeDeliveryOrchestrator()
         adapter.task.status = TaskStatus.CHANGE_READY
 
-        task = TaskDeliveryGraph(adapter).review(adapter.task.id)
+        task = adapter.run_review(adapter.task.id)
 
         self.assertEqual(adapter.calls, ["load_review", "generate_mr", "review"])
         self.assertEqual(task.status, TaskStatus.WAITING_RELEASE_APPROVAL)

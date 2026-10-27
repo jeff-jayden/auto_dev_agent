@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from domain.models import EvaluationCaseResult, EvaluationRun, TaskStatus, RetrievalEvaluationComparison
-from workflows.workflow_graph import ensure_workflow_transition
+from workflows.workflow_state import ensure_workflow_transition
 from observability import TraceRecorder
 from repository.catalog import RepositoryCatalog
 from .retrieval import RetrievalEvaluator, evaluate_repository

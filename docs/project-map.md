@@ -18,7 +18,7 @@ _给准备亲手修改项目的开发者；2026-10-24 按当前工作区代码�
 | 检索、依赖扩展、Reranker | [indexer.py](../src/code_intelligence/indexer.py) | `rank_files()`、`rank_context_files()`、`rerank_candidates()` |
 | 哪些问题阻止 CR 通过 | [code_review_agent.py](../src/agents/code_review_agent.py) | `review()`、`run_loop()`、阻塞级别和类别规则 |
 | 页面刷新慢、重复请求、进度不更新 | [app.js](../apps/web/assets/app.js)、[main.py](../apps/api/main.py) | `initialize()`、`watchJob()`、列表/进度 GET 接口 |
-| 暂停、恢复、心跳或流程状态 | [worker.py](../src/execution/worker.py)、[workflow_graph.py](../src/workflows/workflow_graph.py) | Job 生命周期与 Graph 状态分工，先看本文恢复部分 |
+| 暂停、恢复、心跳或流程状态 | [worker.py](../src/execution/worker.py)、[workflow_state.py](../src/workflows/workflow_state.py) | Job 生命周期与 Graph 状态分工，先看本文恢复部分 |
 
 建议阅读顺序：一个按钮的事件处理 → 对应 API → 被调用的方法 → 同功能测试。不要从头逐行通读 `orchestrator.py`。
 
@@ -84,7 +84,7 @@ flowchart TB
 
 | 阶段 | 从哪一段方法看起 | 会影响什么 |
 | --- | --- | --- |
-| 创建需求 | [TaskOrchestrator.create_task()](../src/workflows/orchestrator.py) → [TaskDeliveryGraph.create()](../src/workflows/workflow_graph.py) | 创建 Task、分析仓库、生成需求分析和方案，等待审批 |
+| 创建需求 | [TaskOrchestrator.create_task()](../src/workflows/orchestrator.py) → `delivery_graph.invoke()` | 创建 Task、分析仓库、生成需求分析和方案，等待审批 |
 | 分析仓库 | `_graph_analyze_repository()` → [RepositoryAnalyzer.analyze()](../src/repository/analyzer.py) | 框架、HEAD、测试命令、代码证据和检索上下文 |
 | 规划 | `_graph_plan()` / `_generate_requirement_plan()` → [RequirementPlanningAgent.plan()](../src/agents/requirement_planning_agent.py) | 影响文件、开发步骤、验证计划及风险 |
 | 批准后开发 | API `approve_task()` → [enqueue_approval()](../src/execution/worker.py) → [Celery execute_job()](../src/execution/celery_app.py) → Worker `execute_job()` / `_execute_traced()` → Orchestrator `approve()` | 保存/领取 Job，执行业务命令；开发前核验基线，准备 Worktree |
@@ -93,7 +93,7 @@ flowchart TB
 | 审查与修复 | `_graph_review()` → `_finish_review_pipeline()` / `_review_loop()` → [CodeReviewAgent.run_loop() / review()](../src/agents/code_review_agent.py) | Finding、阻塞结论，必要时调用开发修复，再次审查 |
 | 发布和合入 | Orchestrator `publish_pull_request()` / `merge_pull_request()` → [publisher.py](../src/scm/publisher.py) | 真实 Git 提交、推送、创建或更新 PR、合入；有外部副作用 |
 
-要改“下一步走哪个节点”，找 [workflow_graph.py](../src/workflows/workflow_graph.py) 的 `TaskDeliveryGraph` 条件边；要改节点内部的业务动作，再找 Orchestrator 和 Agent。当前 `orchestrator.py` 仍有大量实际业务适配逻辑，不是一个空的 Graph 调用壳。
+要改“下一步走哪个节点”，找 [orchestrator.py](../src/workflows/orchestrator.py) 的 `_build_delivery_graph()` 和路由方法；要改节点内部的业务动作，找同文件的 `_graph_*()` 方法和 Agent。状态持久化独立放在 [workflow_state.py](../src/workflows/workflow_state.py)。
 
 ## 🧠 智能能力地图：检索、历史、工具和模型
 
@@ -132,7 +132,7 @@ flowchart TB
 | 关注点 | 去哪里改 | 必须保持的边界 |
 | --- | --- | --- |
 | 业务状态及数据结构 | [models.py](../src/domain/models.py) 中的 `TaskStatus`、`Task`、`ExecutionJob`、`TaskCheckpoint` | 新状态要同步 Graph 转移、API/页面标签及测试，不能只加一个枚举 |
-| 状态转移、人工等待及持久化 | [workflow_graph.py](../src/workflows/workflow_graph.py)：`WorkflowStateStore.transition()` / `record_checkpoint()`，`TaskDeliveryGraph` | Task 是业务投影；不要在别处新增一套互相独立的状态机 |
+| 状态转移、人工等待及持久化 | [workflow_state.py](../src/workflows/workflow_state.py)：`WorkflowStateStore.transition()` / `record_checkpoint()` | Task 是业务投影；交付图由 Orchestrator 构建，不要在别处新增一套互相独立的状态机 |
 | 消息投递与队列 | [celery_app.py](../src/execution/celery_app.py)：`queue_for_action()`、`dispatch_execution_job()`、`execute_job()` | 队列区分职责，不代表同一需求的开发与审查可以无条件并行 |
 | 领取 Job、心跳与执行分支 | [worker.py](../src/execution/worker.py)：`execute_job()`、`_execute_with_heartbeat()`、`_execute_traced()`；[store.py](../src/infrastructure/store.py) 的 Job/租约方法 | 心跳必须关联当前持有者；失联检测不是业务执行成功 |
 | 暂停请求与继续执行 | Worker `cancel()` / `resume()` / `_pause_requested()`；Orchestrator `_checkpoint_handler()` / `resume_from_checkpoint()` | 是安全检查点处协作暂停，不是立刻杀掉正在执行的模型请求或测试 |

@@ -13,6 +13,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+from typing import Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from agents import (
     CodeReviewAgent,
@@ -36,7 +39,29 @@ from repository import RepositoryAnalyzer
 from sandbox import WorkspaceManager
 from scm import GitHubDeliveryService
 from ui_validation import FigmaMCPClient, UIAcceptanceService
-from .workflow_graph import TaskDeliveryGraph, TaskDeliveryState, WorkflowStateStore
+from .workflow_state import WorkflowStateStore
+
+
+class TaskDeliveryState(TypedDict, total=False):
+    """单次交付图调用的输入与节点数据；持久化恢复状态由 WorkflowStateStore 管理。"""
+
+    action: str
+    task_id: str
+    title: str
+    requirement: str
+    repository_id: str
+    figma_url: str
+    preview_url: str
+    viewport_width: int
+    viewport_height: int
+    actor: str
+    comment: str
+    checkpoint_job_id: str | None
+    should_pause: Callable[[], bool] | None
+    checkpoint_handler: Callable[[str, str, dict], bool] | None
+    task: Task
+    repository: Any
+    route: str
 
 
 class TaskOrchestrator:
@@ -84,7 +109,73 @@ class TaskOrchestrator:
         self.ui_acceptance_service = ui_acceptance_service
         self.workflow_state = workflow_state or WorkflowStateStore.memory()
         self.workflow_state.migrate(self.store.list_tasks(), self.store.latest_checkpoint)
-        self.delivery_graph = TaskDeliveryGraph(self)
+        self.delivery_graph = self._build_delivery_graph()
+
+    def _build_delivery_graph(self):
+        """构建交付图，由节点和条件边决定规划、开发与审查的执行顺序。"""
+        builder = StateGraph(TaskDeliveryState)
+        builder.add_node("dispatch", lambda state: state)
+        builder.add_node("create_task", self._graph_create_task)
+        builder.add_node("analyze_repository", self._graph_analyze_repository)
+        builder.add_node("plan", self._graph_plan)
+        builder.add_node("approve_plan", self._graph_approve_plan)
+        builder.add_node("load_review", self._graph_load_review)
+        builder.add_node("develop", self._graph_develop)
+        builder.add_node("generate_mr", self._graph_generate_mr)
+        builder.add_node("review", self._graph_review)
+        builder.add_edge(START, "dispatch")
+        builder.add_conditional_edges(
+            "dispatch",
+            lambda state: state["action"],
+            {
+                "create": "create_task",
+                "approve": "approve_plan",
+                "review": "load_review",
+            },
+        )
+        builder.add_edge("create_task", "analyze_repository")
+        builder.add_edge("analyze_repository", "plan")
+        builder.add_edge("plan", END)
+        builder.add_conditional_edges(
+            "approve_plan",
+            self._route_after_approval,
+            {"develop": "develop", "done": END},
+        )
+        builder.add_conditional_edges(
+            "load_review",
+            self._route_review_entry,
+            {"generate_mr": "generate_mr", "review": "review", "done": END},
+        )
+        builder.add_conditional_edges(
+            "develop",
+            self._route_after_development,
+            {"generate_mr": "generate_mr", "done": END},
+        )
+        builder.add_edge("generate_mr", "review")
+        builder.add_edge("review", END)
+        return builder.compile(name="task-delivery-workflow")
+
+    @staticmethod
+    def _route_after_approval(state: TaskDeliveryState) -> str:
+        if state.get("route") == "done":
+            return "done"
+        return "develop" if state["task"].status == TaskStatus.DEVELOPING else "done"
+
+    @staticmethod
+    def _route_after_development(state: TaskDeliveryState) -> str:
+        return "generate_mr" if state["task"].status == TaskStatus.CHANGE_READY else "done"
+
+    @staticmethod
+    def _route_review_entry(state: TaskDeliveryState) -> str:
+        if state.get("route") == "done":
+            return "done"
+        if state.get("route") == "review":
+            return "review"
+        return (
+            "generate_mr"
+            if state["task"].status == TaskStatus.CHANGE_READY
+            else "review"
+        )
 
     def create_task(
         self,
@@ -119,23 +210,25 @@ class TaskOrchestrator:
             if len(repositories) != 1:
                 raise ValueError("Repository must be selected before creating a task")
             repository_id = repositories[0].id
+        graph_input: TaskDeliveryState = {
+            "action": "create",
+            "title": title,
+            "requirement": requirement,
+            "repository_id": repository_id,
+            "figma_url": figma_url,
+            "preview_url": preview_url,
+            "viewport_width": viewport_width,
+            "viewport_height": viewport_height,
+        }
         if self.tracer is not None:
             with self.tracer.trace(
                 "task.create", kind="planning", metadata={"repository_id": repository_id}
             ) as trace:
-                task = self.delivery_graph.create(
-                    title, requirement, repository_id,
-                    figma_url=figma_url, preview_url=preview_url,
-                    viewport_width=viewport_width, viewport_height=viewport_height,
-                )
+                task = self.delivery_graph.invoke(graph_input)["task"]
                 trace.task_id = task.id
                 self.store.save_trace(trace)
                 return task
-        return self.delivery_graph.create(
-            title, requirement, repository_id,
-            figma_url=figma_url, preview_url=preview_url,
-            viewport_width=viewport_width, viewport_height=viewport_height,
-        )
+        return self.delivery_graph.invoke(graph_input)["task"]
 
     def rerun_task(self, task_id: str) -> Task:
         """基于已结束任务的原始需求创建一次全新的规划执行。
@@ -464,13 +557,14 @@ class TaskOrchestrator:
         Returns:
             开发、测试和审查推进后的最新任务。
         """
-        return self.delivery_graph.approve(
-            task_id,
-            actor,
-            comment,
-            checkpoint_job_id=checkpoint_job_id,
-            should_pause=should_pause,
-        )
+        return self.delivery_graph.invoke({
+            "action": "approve",
+            "task_id": task_id,
+            "actor": actor,
+            "comment": comment,
+            "checkpoint_job_id": checkpoint_job_id,
+            "should_pause": should_pause,
+        })["task"]
 
     def _graph_approve_plan(self, state: TaskDeliveryState) -> dict:
         task = self._require_task(state["task_id"])
@@ -1061,11 +1155,12 @@ class TaskOrchestrator:
         Returns:
             审查通过、要求修改或暂停后的最新任务。
         """
-        return self.delivery_graph.review(
-            task_id,
-            checkpoint_job_id=job_id,
-            should_pause=should_pause,
-        )
+        return self.delivery_graph.invoke({
+            "action": "review",
+            "task_id": task_id,
+            "checkpoint_job_id": job_id,
+            "should_pause": should_pause,
+        })["task"]
 
     def apply_user_feedback(
         self,

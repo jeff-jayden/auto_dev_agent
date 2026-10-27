@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from domain.models import Task, TaskCheckpoint, TaskStatus
-from workflows.workflow_graph import WorkflowStateStore, ensure_workflow_transition
+from workflows.workflow_state import WorkflowStateStore, ensure_workflow_transition
 
 
 class WorkflowStateStoreTests(unittest.TestCase):
