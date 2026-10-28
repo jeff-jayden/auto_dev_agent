@@ -238,6 +238,7 @@ class DeveloperToolkit:
         if not proposal.replacements:
             raise PatchRejected("Proposal contains no changes or replacements")
         originals: dict[Path, str] = {}
+        created_targets: set[Path] = set()
         updated: dict[Path, str] = {}
         relative_paths: list[str] = []
         for replacement in proposal.replacements:
@@ -249,7 +250,18 @@ class DeveloperToolkit:
                 )
             target = self.policy.resolve_write_path(replacement.path)
             if not target.is_file():
-                raise PatchRejected(f"Text replacement target does not exist: {replacement.path}")
+                if search:
+                    raise PatchRejected(f"Text replacement target does not exist: {replacement.path}")
+                if target.exists():
+                    raise PatchRejected(f"New-file target is not a regular file: {replacement.path}")
+                if not replace.strip():
+                    raise PatchRejected(f"New-file replacement is empty: {replacement.path}")
+                created_targets.add(target)
+                originals[target] = ""
+                updated[target] = replace
+                if replacement.path not in relative_paths:
+                    relative_paths.append(replacement.path)
+                continue
             current = updated.get(target)
             if current is None:
                 current = target.read_text(encoding="utf-8", errors="strict")
@@ -279,10 +291,14 @@ class DeveloperToolkit:
             self._validate_content(target, content)
         try:
             for target, content in updated.items():
+                target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding="utf-8")
         except OSError:
             for target, content in originals.items():
-                target.write_text(content, encoding="utf-8")
+                if target in created_targets:
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(content, encoding="utf-8")
             raise
         for replacement in proposal.replacements:
             self.audit.append(

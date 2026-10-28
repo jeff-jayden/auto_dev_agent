@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import difflib
 import json
+import re
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -1211,6 +1212,10 @@ class TaskOrchestrator:
         if not rollback_requested:
             from tools.component_scope import approve_feedback_components
             approve_feedback_components(task, normalized_feedback, actor)
+        expanded_files = (
+            [] if rollback_requested else
+            self._expand_feedback_scope(task, actor, normalized_feedback)
+        )
         before_snapshot = self._workspace_snapshot(task)
         snapshot_id = self._save_feedback_snapshot(task, before_snapshot)
         feedback_round = {
@@ -1235,7 +1240,11 @@ class TaskOrchestrator:
             task,
             "user_feedback_submitted",
             f"{actor} 查看 Diff 后要求继续修改",
-            {"feedback": normalized_feedback, "job_id": job_id},
+            {
+                "feedback": normalized_feedback,
+                "job_id": job_id,
+                "scope_expansion": expanded_files,
+            },
         )
 
         if rollback_requested:
@@ -1877,6 +1886,63 @@ class TaskOrchestrator:
         return any(action in compact for action in actions) and any(
             target in compact for target in targets
         )
+
+    @staticmethod
+    def _expand_feedback_scope(task: Task, actor: str, feedback: str) -> list[str]:
+        """Record narrowly scoped files explicitly requested by acceptance feedback.
+
+        A review comment is allowed to request a new source file even when the
+        original plan only named the file containing the reviewed code.  The
+        expansion stays file-based: directory mentions are converted to one
+        predictable page filename instead of granting write access to a whole
+        directory.
+        """
+        if task.technical_plan is None:
+            return []
+        normalized = feedback.replace("\\", "/")
+        candidates = re.findall(
+            r"(?<![\w.-])(src/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|js|jsx|ts|tsx|css|scss))",
+            normalized,
+            flags=re.I,
+        )
+        directories = re.findall(
+            r"(?<![\w.-])(src(?:/[A-Za-z0-9_.-]+)+)\s*目录",
+            normalized,
+            flags=re.I,
+        )
+        if directories and any(marker in normalized.lower() for marker in ("页面", "page")):
+            words = [
+                word for word in re.findall(r"[A-Za-z][A-Za-z0-9]*", task.title)
+                if word.lower() not in {"develop", "development", "feature", "implement"}
+            ]
+            if words:
+                component = "".join(word[:1].upper() + word[1:] for word in words)
+                if not component.lower().endswith("page"):
+                    component += "Page"
+                candidates.append(f"{directories[0].rstrip('/')}/{component}.js")
+
+        approved = task.technical_plan.affected_files
+        added: list[str] = []
+        for candidate in candidates:
+            path = candidate.strip("`'\".,:;()[]{} ").replace("//", "/")
+            parts = Path(path).parts
+            if not path.startswith("src/") or ".." in parts or path in approved or path in added:
+                continue
+            added.append(path)
+        if not added:
+            return []
+
+        approved.extend(added)
+        task.technical_plan.implementation_steps.append(
+            "根据验收反馈扩展可写范围：" + "、".join(added)
+        )
+        task.metadata.setdefault("scope_expansion_requests", []).append({
+            "actor": actor,
+            "feedback": feedback,
+            "approved_files": added,
+            "created_at": datetime.now(UTC).isoformat(),
+        })
+        return added
 
     def _feedback_snapshot_dir(self, task: Task) -> Path:
         if not task.workspace:

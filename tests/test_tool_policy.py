@@ -2,11 +2,51 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from domain.models import DevelopmentProposal, PatchChange, TextReplacement
+from domain.models import (
+    DevelopmentProposal,
+    PatchChange,
+    ReplacementDevelopmentProposal,
+    TextReplacement,
+)
 from tools import DeveloperToolkit, PatchRejected, ToolPolicy
 
 
 class ToolPolicyTests(unittest.TestCase):
+    def test_structured_replacement_does_not_require_model_owned_test_command(self):
+        proposal = ReplacementDevelopmentProposal.model_validate({
+            "replacements": [{
+                "path": "src/App.js",
+                "search": "old",
+                "replace": "new",
+            }],
+            "preserved_behaviors": ["保留首页入口"],
+        })
+
+        self.assertIsNone(proposal.test_command)
+
+    def test_replacement_can_create_an_explicitly_approved_new_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            policy = ToolPolicy(
+                repository,
+                ["src/pages/YourVideosPage.js"],
+                "npm test",
+            )
+            proposal = DevelopmentProposal(
+                test_command="npm test",
+                preserved_behaviors=["保留 Your videos 页面内容"],
+                replacements=[TextReplacement(
+                    path="src/pages/YourVideosPage.js",
+                    search="",
+                    replace="export default function YourVideosPage() { return null; }\n",
+                )],
+            )
+
+            changed = DeveloperToolkit(repository, policy).apply_proposal(proposal)
+
+            self.assertEqual(changed, ["src/pages/YourVideosPage.js"])
+            self.assertTrue((repository / "src/pages/YourVideosPage.js").is_file())
+
     def test_classifies_high_risk_and_forbidden_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = ToolPolicy(

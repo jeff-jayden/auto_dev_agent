@@ -627,7 +627,9 @@ class CodeDevelopmentAgent:
             "明确要求移除时才可删除，并在 intentional_removals 中逐项写明删除对象及需求依据。"
             "对于简单的按钮点击提示，优先使用 window.alert，除非需求明确要求自定义模态框。"
             "不得引入未导入或未定义的标识符，优先选择最小且无需新增依赖的实现。"
-            "test_command 必须原样返回，不得请求或发明其他命令。输出严格 JSON。"
+            "test_command 由系统管理，可以不返回；即使返回也不得请求或发明其他命令。输出严格 JSON。"
+            "如果 allowed_files 中的目标文件尚不存在，可以创建该文件：使用 replacement，"
+            "path 填该文件，search 必须为空字符串，replace 填完整新文件内容。"
             "当 current_step 非空时，只完成该步骤的 objective，并且只能修改该步骤的 allowed_files；"
             "此前步骤的代码已经存在于 repository_context，必须保留，不能重复实现或回滚。"
         )
@@ -794,7 +796,9 @@ class CodeDevelopmentAgent:
             new_files=response.new_files,
             replacements=response.replacements,
             intentional_removals=response.intentional_removals,
-            test_command=response.test_command,
+            # Never trust or require the model to choose an executable command.
+            # ToolPolicy validates this analyzer-owned command again at runtime.
+            test_command=test_command,
         )
 
     @staticmethod

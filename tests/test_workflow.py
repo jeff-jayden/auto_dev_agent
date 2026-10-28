@@ -24,6 +24,21 @@ class WorkflowTests(unittest.TestCase):
     def tearDown(self):
         self.temp_directory.cleanup()
 
+    def test_feedback_expands_scope_to_one_named_page_file(self):
+        orchestrator = build_orchestrator(self.runtime)
+        task = orchestrator.create_task("your videos 页面开发", "实现 your videos 页面")
+
+        added = orchestrator._expand_feedback_scope(
+            task,
+            "github-/agent-fix",
+            "把新增的页面内容单独放到一个文件，然后放到 src/pages 目录下",
+        )
+
+        self.assertEqual(added, ["src/pages/YourVideosPage.js"])
+        self.assertIn("src/pages/YourVideosPage.js", task.technical_plan.affected_files)
+        request = task.metadata["scope_expansion_requests"][-1]
+        self.assertEqual(request["approved_files"], added)
+
     def test_vertical_slice_creates_verified_change(self):
         orchestrator = build_orchestrator(self.runtime)
         task = orchestrator.create_task(

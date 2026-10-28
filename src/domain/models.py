@@ -179,7 +179,10 @@ class ReplacementDevelopmentProposal(BaseModel):
     summary: str = "按批准方案实现需求"
     replacements: list[TextReplacement] = Field(min_length=1, max_length=8)
     intentional_removals: list[str] = Field(default_factory=list, max_length=12)
-    test_command: str
+    # The repository analyzer owns the executable test command.  Keeping this
+    # field optional lets smaller models omit it without weakening the policy:
+    # CodeDevelopmentAgent always overwrites it with the analyzed command.
+    test_command: str | None = None
 
 
 class DevelopmentAttempt(BaseModel):
