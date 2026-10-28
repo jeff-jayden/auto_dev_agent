@@ -101,7 +101,8 @@ class TraceRecorder:
             span.error = str(error)[:1000]
             raise
         else:
-            span.status = "succeeded"
+            if span.status == "running":
+                span.status = "succeeded"
         finally:
             span.ended_at = datetime.now(UTC)
             span.duration_ms = round((span.ended_at - span.started_at).total_seconds() * 1000, 2)

@@ -6,10 +6,47 @@ from threading import Event
 
 from tests.support import build_orchestrator
 from execution import TaskExecutionWorker
+from agents import DevelopmentRunOutcome
 from domain.models import TaskStatus
 
 
 class ExecutionWorkerCheckpointTests(unittest.TestCase):
+    def test_feedback_business_failure_marks_job_and_trace_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            orchestrator = build_orchestrator(Path(directory) / "runtime")
+            task = orchestrator.create_task(
+                "反馈失败状态", "任务支持 low、medium、high，默认使用 medium。"
+            )
+            task = orchestrator.approve(task.id, "tester", "同意")
+            repository = orchestrator.store.get_repository("test-repository")
+            repository.execution_mode = "plan_only"
+            orchestrator.store.save_repository(repository)
+
+            class FailedDeveloper:
+                model_gateway = type("Gateway", (), {"enabled": True})()
+
+                @staticmethod
+                def run(*_args, **_kwargs):
+                    return DevelopmentRunOutcome(kind="failed", error="structured proposal invalid")
+
+            orchestrator.code_development_agent = FailedDeveloper()
+            worker = TaskExecutionWorker(lambda: orchestrator, poll_interval=0.01)
+            try:
+                job = worker.enqueue_user_feedback(task.id, "tester", "调整页面结构")
+                completed = self._wait_for_job(orchestrator, job.id, {"failed"})
+
+                self.assertEqual(completed.error, "structured proposal invalid")
+                deadline = time.monotonic() + 2
+                traces = orchestrator.store.list_traces(task.id)
+                while traces and traces[0].status == "running" and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                    traces = orchestrator.store.list_traces(task.id)
+                self.assertEqual(traces[0].status, "failed")
+                spans = orchestrator.store.list_spans(traces[0].id)
+                self.assertEqual(spans[0].status, "failed")
+            finally:
+                worker.stop()
+
     def test_code_review_is_queued_as_a_background_job(self):
         with tempfile.TemporaryDirectory() as directory:
             orchestrator = build_orchestrator(Path(directory) / "runtime")

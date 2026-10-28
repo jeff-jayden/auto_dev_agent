@@ -513,9 +513,12 @@ class TaskExecutionWorker:
                 f"job.{job.action}", task_id=job.task_id, kind="execution",
                 metadata={"job_id": job.id, "attempt": job.attempts},
             ) as trace:
-                with orchestrator.tracer.span(f"agent.{job.action}", kind="agent"):
+                with orchestrator.tracer.span(f"agent.{job.action}", kind="agent") as agent_span:
                     self._execute_traced(orchestrator, job)
-                completed = orchestrator.store.get_job(job.id)
+                    completed = orchestrator.store.get_job(job.id)
+                    if completed and completed.status == "failed" and agent_span is not None:
+                        agent_span.status = "failed"
+                        agent_span.error = (completed.error or "业务任务执行失败")[:1000]
                 if completed and completed.status == "failed":
                     trace.status = "failed"
             return
@@ -611,8 +614,9 @@ class TaskExecutionWorker:
                 latest.status == "pause_requested"
                 and paused_checkpoint.get("job_id") == job.id
             )
+            business_failed = bool(task.error) or task.status == TaskStatus.FAILED
             latest.status = "paused" if pause_honored else (
-                "failed" if task.status == TaskStatus.FAILED else "succeeded"
+                "failed" if business_failed else "succeeded"
             )
             latest.error = task.error if latest.status == "failed" else None
             latest.lease_expires_at = None
